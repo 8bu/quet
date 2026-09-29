@@ -12,10 +12,8 @@ import (
 	"github.com/8bu/quet/internal/config"
 	"github.com/8bu/quet/internal/review"
 	"github.com/8bu/quet/internal/tui"
+	"github.com/8bu/quet/internal/version"
 )
-
-// version is printed by `quet --version`.
-const version = "0.1.0"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -39,7 +37,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, helpText())
 		return 0
 	case cmd.version:
-		fmt.Fprintf(stdout, "quet %s\n", version)
+		fmt.Fprintf(stdout, "quet %s\n", version.String())
 		return 0
 	}
 

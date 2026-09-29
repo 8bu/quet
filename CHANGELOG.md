@@ -1,0 +1,47 @@
+# Changelog
+
+All notable changes to Quet are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-09-29
+
+First release.
+
+### Added
+
+- Corpus loading for `.jsonl`, `.json` (array, or an object wrapping one) and `.txt`, with the
+  text field detected from `text`, `content`, `note`, `input`, `prompt`, `sentence` or `body`.
+- Full metadata preservation: every imported key survives a review round trip and is written back
+  in its original order on export. The source corpus is only ever read.
+- Stable record IDs (an explicit `id` field, otherwise a content hash, with a `#2`, `#3`… suffix
+  for duplicates) so review progress survives reordering and re-runs.
+- Interactive TUI: three focusable panels, contextual footer hints, a grouped `?` help overlay, a
+  searchable `:` command palette, and `1`/`2`/`3` panel jumps.
+- Review statuses (`unreviewed`, `approved`, `rejected`, `needs_review`) persisted immediately on
+  change, with automatic advance to the next unresolved record.
+- Three separate flag sources: `auto_flags`, `suggested_flags` (read from imported metadata) and
+  `manual_flags` (defined in an external `flags.yaml`, never hard-coded).
+- Seven deterministic, explainable auto checks: `duplicate`, `too_long`, `empty`,
+  `repeated_chars`, `weird_symbols`, `missing_amount` and `possible_template`. Warnings only —
+  checks never change a status.
+- Inline editing that preserves the original text alongside the edited text.
+- Search across the final text, the original text and imported metadata, with a selectable result
+  panel.
+- Eleven filter kinds: all, unreviewed, approved, rejected, needs review, edited, auto flag,
+  manual flag, suggested flag, source and batch.
+- Undo (`z`) for status changes, manual flag changes and edits, persisted so it survives a restart.
+- SQLite sidecar storage (`<corpus>.quet.db`) in WAL mode with full synchronous writes, keyed by
+  stable record ID, with an `annotations` column reserved for future structured annotations.
+- Five export presets (`approved`, `rejected`, `needs_review`, `all`, `clean`), available from the
+  CLI and the command palette, written atomically via a temporary file and rename. Exports refuse
+  to overwrite the source corpus, its sidecar, or an existing file without `--force`.
+- Configuration from `./quet.yaml` or `~/.config/quet/config.yaml`, merged over sensible defaults.
+- CLI commands: interactive review, `stats`, `export`, and `--version`.
+- Verified performance on 100,000 short records: under a second to open, ~16 ms per review action.
+
+[Unreleased]: https://github.com/8bu/quet/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/8bu/quet/releases/tag/v0.1.0
