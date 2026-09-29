@@ -55,3 +55,7 @@ quet export examples/corpus.jsonl    # writes examples/corpus.approved.jsonl
 | [Development](docs/development.md) | Building, testing, layout, releasing |
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
