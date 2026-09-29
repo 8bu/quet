@@ -1,0 +1,10 @@
+review:
+  skip_reviewed: true
+
+checks:
+  max_chars: 160
+  repeated_char_threshold: 5
+  weird_symbol_ratio: 0.35
+  template_min_occurrences: 8
+
+flags_file: "./flags.yaml"

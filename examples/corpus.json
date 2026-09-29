@@ -1,0 +1,31 @@
+{
+ "corpus": "vi-finance-notes",
+ "version": 1,
+ "records": [
+  {
+   "text": "bắn thg Nam 2 củ tiền hôm nọ",
+   "source": "claude",
+   "batch": "slang-loan-03"
+  },
+  {
+   "text": "CK Nam 2tr",
+   "source": "claude",
+   "batch": "slang-loan-03"
+  },
+  {
+   "text": "ck   nam 2tr",
+   "source": "qwen",
+   "batch": "slang-loan-03"
+  },
+  {
+   "text": "cho Nam vay 2tr",
+   "source": "qwen",
+   "batch": "template-loan-01"
+  },
+  {
+   "text": "cho Linh vay 3tr",
+   "source": "qwen",
+   "batch": "template-loan-01"
+  }
+ ]
+}

@@ -1,0 +1,15 @@
+{"id": "note-001", "text": "bắn thg Nam 2 củ tiền hôm nọ", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-02T01:00:00Z", "suggested_flags": ["slang"], "lang": "vi"}
+{"id": "note-002", "text": "CK Nam 2tr", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-03T02:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-003", "text": "ck   nam 2tr", "source": "qwen", "batch": "slang-loan-03", "created_at": "2026-01-04T03:00:00Z", "suggested_flags": ["duplicate"], "lang": "vi"}
+{"id": "note-004", "text": "cho Nam vay 2tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-05T04:00:00Z", "suggested_flags": ["synthetic-looking"], "lang": "vi"}
+{"id": "note-005", "text": "cho Linh vay 3tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-06T05:00:00Z", "suggested_flags": ["synthetic-looking"], "lang": "vi"}
+{"id": "note-006", "text": "cho Hùng vay 5tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-07T06:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-007", "text": "cho Mai vay 1tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-08T07:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-008", "text": "ckkkkkkkkk Nam 2tr", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-09T08:00:00Z", "suggested_flags": ["typo"], "lang": "vi"}
+{"id": "note-009", "text": "mượn bà Hoa 500k đóng học phí cho con", "source": "claude", "batch": "family-loan-02", "created_at": "2026-01-01T09:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-010", "text": "", "source": "claude", "batch": "family-loan-02", "created_at": "2026-01-02T00:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-011", "text": "nhận lương tháng 7 được 12tr5, trả nợ 3tr", "source": "claude", "batch": "salary-01", "created_at": "2026-01-03T01:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-012", "text": "chuyển khoản trả nợ thẻ tín dụng $20 cho Minh", "source": "qwen", "batch": "family-loan-02", "created_at": "2026-01-04T02:00:00Z", "suggested_flags": ["unnatural"], "lang": "vi"}
+{"id": "note-013", "text": "cho vay nóng 5 lít, hẹn mai trả", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-05T03:00:00Z", "suggested_flags": ["slang"], "lang": "vi"}
+{"id": "note-014", "text": "💰💸🙏 thanks bro 500000", "source": "qwen", "batch": "weird-01", "created_at": "2026-01-06T04:00:00Z", "suggested_flags": ["weird_symbols"], "lang": "vi"}
+{"id": "note-015", "text": "Hùng mượn 1.5tr mua đồ ăn cho mèo, chưa trả", "source": "claude", "batch": "family-loan-02", "created_at": "2026-01-07T05:00:00Z", "suggested_flags": [], "lang": "vi"}

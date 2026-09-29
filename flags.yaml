@@ -1,0 +1,18 @@
+manual:
+  slang:
+    description: Notable Vietnamese slang or informal wording.
+
+  typo:
+    description: Natural typo, abbreviation, or shorthand.
+
+  ambiguous:
+    description: Meaning is genuinely ambiguous.
+
+  unnatural:
+    description: Unlikely wording for a real user.
+
+  synthetic-looking:
+    description: Looks strongly generated or templated.
+
+  unusual:
+    description: Valid but uncommon example worth revisiting.

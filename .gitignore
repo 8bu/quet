@@ -1,0 +1,11 @@
+# Compiled binary produced by `go build -o quet ./cmd/quet` / `make build`.
+/quet
+
+# Cross-compiled release artifacts (`make release`).
+/dist/
+
+# Quet's SQLite review sidecars. Local state: progress, undo history and edits
+# are per-machine and must never be committed.
+*.quet.db
+*.quet.db-wal
+*.quet.db-shm
