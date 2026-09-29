@@ -13,6 +13,10 @@ type Options struct {
 	// Settings re-reads the config and flags that apply to the corpus at
 	// corpusPath. Nil disables in-app config creation, editing and reload.
 	Settings func(corpusPath string) (config.Settings, error)
+	// UpdateCheck reports a newer Quet release: the latest version and true
+	// when an update is available. It blocks, so it runs once per program
+	// inside a tea.Cmd, never on the UI goroutine. Nil disables the check.
+	UpdateCheck func() (latest string, ok bool)
 }
 
 // Run starts the full-screen TUI (alt screen) and blocks until quit.

@@ -67,6 +67,8 @@ type browser struct {
 	status    string
 	statusErr bool
 	statusSeq int
+
+	updateVersion string // newer release, handed to the review model
 }
 
 // openedMsg reports the result of running the gate on a picked file.
@@ -157,8 +159,9 @@ func readEntries(dir string, hidden bool) ([]entry, error) {
 	return append(out, files...), nil
 }
 
-// Init implements tea.Model.
-func (b browser) Init() tea.Cmd { return nil }
+// Init implements tea.Model: it starts the optional update check. The review
+// model the browser hands off to never repeats it.
+func (b browser) Init() tea.Cmd { return checkUpdate(b.opt.UpdateCheck) }
 
 // Update implements tea.Model. A successful open returns the review model,
 // which takes over the program.
@@ -171,6 +174,9 @@ func (b browser) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.seq == b.statusSeq {
 			b.status = ""
 		}
+		return b, nil
+	case updateAvailableMsg:
+		b.updateVersion = msg.version
 		return b, nil
 	case openedMsg:
 		return b.opened(msg)
@@ -280,6 +286,7 @@ func (b browser) opened(msg openedMsg) (tea.Model, tea.Cmd) {
 		return b.fail("Can't open %s: %v", filepath.Base(msg.path), msg.err)
 	}
 	m := newModel(msg.sess, b.opt)
+	m.updateVersion = b.updateVersion
 	m, _ = m.update(tea.WindowSizeMsg{Width: b.width, Height: b.height})
 	hint := m.startupHint()
 	m, cmd := m.setStatus("Opened %s  %d records", filepath.Base(msg.path), msg.sess.Len())
@@ -309,7 +316,8 @@ func (b browser) note(format string, args ...any) (tea.Model, tea.Cmd) {
 const maxErrorRows = 3
 
 // View implements tea.Model: one panel with the path and the listing, then
-// the status (errors wrap to maxErrorRows lines) and the footer.
+// the status (errors wrap to maxErrorRows lines) or the update notice, and the
+// footer.
 func (b browser) View() string {
 	w, h := b.width, b.height
 	if w <= 0 {
@@ -333,6 +341,8 @@ func (b browser) View() string {
 		} else {
 			status = []string{truncateLine(styleStatus.Render(b.status), w)}
 		}
+	} else if b.updateVersion != "" && h >= 3 {
+		status = []string{truncateLine(styleAccent.Render(updateNotice(b.updateVersion)), w)}
 	}
 	rows := make([]string, 0, h)
 	if bodyH := h - 1 - len(status); bodyH > 0 {

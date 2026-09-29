@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/8bu/quet/internal/review"
@@ -9,7 +10,7 @@ import (
 
 // command is a parsed command line: what to do, with which corpus, and the flags for it.
 type command struct {
-	kind   string // "review" (default), "stats", "export" or "init"
+	kind   string // "review" (default), "stats", "export", "init" or "update"
 	corpus string
 
 	help    bool
@@ -40,6 +41,9 @@ type command struct {
 
 	// init flags
 	global bool
+
+	// update flags
+	check bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -54,8 +58,8 @@ func usagef(format string, args ...any) error {
 // parseArgs parses a command line. The corpus argument and flags may appear in any order;
 // --flag value and --flag=value are both accepted. The first positional "stats" or "export"
 // followed by a corpus argument selects that subcommand; "init" (no corpus) writes starter
-// config files and "help" prints the help. With no corpus argument the review TUI opens on
-// the file browser.
+// config files, "update" (no corpus) updates the binary and "help" prints the help. With no
+// corpus argument the review TUI opens on the file browser.
 func parseArgs(args []string) (command, error) {
 	cmd := command{kind: "review", status: "approved"}
 
@@ -116,8 +120,8 @@ func parseArgs(args []string) (command, error) {
 		}
 		cmd.help = true
 		return cmd, nil
-	case positional[0] == "init":
-		cmd.kind = "init"
+	case positional[0] == "init" || positional[0] == "update":
+		cmd.kind = positional[0]
 		rest = positional[1:]
 	case positional[0] == "stats" || positional[0] == "export":
 		if len(positional) < 2 {
@@ -187,6 +191,8 @@ func (c *command) setBoolFlag(name string) error {
 		c.force = true
 	case "--global":
 		c.global = true
+	case "--check":
+		c.check = true
 	default:
 		return usagef("unknown flag %s", name)
 	}
@@ -195,8 +201,14 @@ func (c *command) setBoolFlag(name string) error {
 
 // validate rejects flags that do not belong to the selected subcommand.
 func (c *command) validate() error {
-	if c.kind == "init" {
-		return c.validateInit()
+	if c.check && c.kind != "update" {
+		return usagef("--check is only valid with `quet update`")
+	}
+	switch c.kind {
+	case "init":
+		return c.validateOnly("--global", "--force")
+	case "update":
+		return c.validateOnly("--check")
 	}
 	if c.global {
 		return usagef("--global is only valid with `quet init`")
@@ -244,28 +256,34 @@ func (c *command) validate() error {
 	return nil
 }
 
-// validateInit rejects every flag except --global and --force for `quet init`.
-func (c *command) validateInit() error {
-	var flag string
-	switch {
-	case c.hasFilter:
-		flag = "--filter"
-	case c.noSkipReviewed:
-		flag = "--no-skip-reviewed"
-	case c.hasConfig:
-		flag = "--config"
-	case c.hasFlagsFile:
-		flag = "--flags-file"
-	case c.hasStatus:
-		flag = "--status"
-	case c.hasOutput:
-		flag = "--output"
-	case c.withReview:
-		flag = "--with-review"
-	case c.hasFormat:
-		flag = "--format"
-	default:
-		return nil
+// validateOnly rejects every given flag except allowed for `quet <kind>`.
+func (c *command) validateOnly(allowed ...string) error {
+	for _, flag := range c.givenFlags() {
+		if !slices.Contains(allowed, flag) {
+			return usagef("%s is not valid with `quet %s`", flag, c.kind)
+		}
 	}
-	return usagef("%s is not valid with `quet init`", flag)
+	return nil
+}
+
+// givenFlags lists the subcommand flags present on the command line, in a fixed order.
+func (c *command) givenFlags() []string {
+	var flags []string
+	add := func(given bool, name string) {
+		if given {
+			flags = append(flags, name)
+		}
+	}
+	add(c.hasFilter, "--filter")
+	add(c.noSkipReviewed, "--no-skip-reviewed")
+	add(c.hasConfig, "--config")
+	add(c.hasFlagsFile, "--flags-file")
+	add(c.hasStatus, "--status")
+	add(c.hasOutput, "--output")
+	add(c.withReview, "--with-review")
+	add(c.hasFormat, "--format")
+	add(c.force, "--force")
+	add(c.global, "--global")
+	add(c.check, "--check")
+	return flags
 }

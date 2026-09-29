@@ -44,22 +44,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	switch cmd.kind {
+	case "update":
+		return runUpdate(cmd, stdout, stderr)
+	case "stats", "export", "init":
+		check := startCommandCheck(cmd)
+		code := runOneShot(cmd, stdout, stderr)
+		check.notify(stderr)
+		return code
+	default:
+		return runReview(cmd, stdout, stderr)
+	}
+}
+
+// runOneShot runs a command that prints its result and exits: stats, export or init.
+func runOneShot(cmd command, stdout, stderr io.Writer) int {
+	switch cmd.kind {
 	case "stats":
 		return runStats(cmd, stdout, stderr)
 	case "export":
 		return runExport(cmd, stdout, stderr)
-	case "init":
-		return runInit(cmd, stdout, stderr)
 	default:
-		return runReview(cmd, stdout, stderr)
+		return runInit(cmd, stdout, stderr)
 	}
 }
 
 // runReview opens cmd.corpus in the TUI, or the file browser when no corpus is
 // given or it names a directory.
 func runReview(cmd command, stdout, stderr io.Writer) int {
+	check := startCommandCheck(cmd)
 	if dir, ok := browseDir(cmd.corpus); ok {
-		return runBrowse(cmd, dir, stderr)
+		return runBrowse(cmd, dir, check, stderr)
 	}
 	session, err := openSession(cmd)
 	if err != nil {
@@ -74,7 +88,7 @@ func runReview(cmd command, stdout, stderr io.Writer) int {
 
 	// tui.Run restores the terminal (leaves the alt screen, shows the cursor)
 	// before returning, including when it returns an error.
-	if err := tui.Run(session, reviewOptions(cmd)); err != nil {
+	if err := tui.Run(session, reviewOptions(cmd, check)); err != nil {
 		fmt.Fprintf(stderr, "quet: %v\n", err)
 		return 1
 	}
@@ -82,9 +96,13 @@ func runReview(cmd command, stdout, stderr io.Writer) int {
 }
 
 // reviewOptions lets the TUI re-read the configuration and flags the same way
-// the command line loaded them, so edits and reloads honour --config and --flags-file.
-func reviewOptions(cmd command) tui.Options {
-	return tui.Options{Settings: func(p string) (config.Settings, error) { return loadSettings(cmd, p) }}
+// the command line loaded them, so edits and reloads honour --config and --flags-file,
+// and hands it the pending update check (nil when update.check is off).
+func reviewOptions(cmd command, check *pendingCheck) tui.Options {
+	return tui.Options{
+		Settings:    func(p string) (config.Settings, error) { return loadSettings(cmd, p) },
+		UpdateCheck: check.tuiCheck(),
+	}
 }
 
 // browseDir reports the directory to browse: the working directory when no
@@ -100,7 +118,7 @@ func browseDir(corpusArg string) (string, bool) {
 }
 
 // runBrowse runs the file browser; the file it opens is reviewed in the same TUI.
-func runBrowse(cmd command, dir string, stderr io.Writer) int {
+func runBrowse(cmd command, dir string, check *pendingCheck, stderr io.Writer) int {
 	cwd, _ := os.Getwd()
 	open := func(path string) (*review.Session, error) {
 		// Relative paths keep gate errors short; the sidecar lands in the same place.
@@ -109,7 +127,7 @@ func runBrowse(cmd command, dir string, stderr io.Writer) int {
 		}
 		return openPicked(cmd, path)
 	}
-	session, err := tui.Browse(dir, open, reviewOptions(cmd))
+	session, err := tui.Browse(dir, open, reviewOptions(cmd, check))
 	if session != nil {
 		defer session.Close()
 	}

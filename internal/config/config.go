@@ -17,9 +17,15 @@ type Review struct {
 	SkipReviewed bool `yaml:"skip_reviewed"`
 }
 
+// Update controls the release check. It is opt-in: Quet only goes online when Check is set.
+type Update struct {
+	Check bool `yaml:"check"` // look for a newer release on every run
+}
+
 type Config struct {
 	Review    Review         `yaml:"review"`
 	Checks    checks.Options `yaml:"checks"`
+	Update    Update         `yaml:"update"`
 	FlagsFile string         `yaml:"flags_file"`
 	Path      string         `yaml:"-"` // config file actually loaded ("" = defaults)
 }

@@ -30,6 +30,9 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 			m.status = ""
 		}
 		return m, nil
+	case updateAvailableMsg:
+		m.updateVersion = msg.version
+		return m, nil
 	case editorDoneMsg:
 		return m.editorDone(msg)
 	case tea.KeyMsg:

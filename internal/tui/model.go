@@ -3,6 +3,7 @@ package tui
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -100,6 +101,8 @@ type model struct {
 	status    string
 	statusSeq int
 
+	updateVersion string // newer release reported by Options.UpdateCheck
+
 	editor textarea.Model
 
 	facets facetList
@@ -141,8 +144,18 @@ func newModel(s *review.Session, opt Options) model {
 	return m
 }
 
-// Init implements tea.Model.
-func (m model) Init() tea.Cmd { return nil }
+// Init implements tea.Model: it starts the optional update check and expires
+// the startup hint like any other status, so a persistent update notice can
+// take the status row afterwards.
+func (m model) Init() tea.Cmd {
+	check := checkUpdate(m.opt.UpdateCheck)
+	if m.status == "" {
+		return check
+	}
+	seq := m.statusSeq
+	expire := tea.Tick(statusTTL, func(time.Time) tea.Msg { return statusExpireMsg{seq: seq} })
+	return tea.Batch(check, expire)
+}
 
 // Update implements tea.Model.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -263,7 +276,7 @@ func (m model) bodyDimensions() (int, int) {
 		h = 24
 	}
 	statusRows := 0
-	if m.status != "" && h >= 3 {
+	if text, _ := m.statusText(); text != "" && h >= 3 {
 		statusRows = 1
 	}
 	bh := h - 1 - statusRows
@@ -271,6 +284,18 @@ func (m model) bodyDimensions() (int, int) {
 		bh = 0
 	}
 	return w, bh
+}
+
+// statusText returns the status row's text and style: the transient status
+// while one is showing, else the persistent update notice, else "".
+func (m model) statusText() (string, lipgloss.Style) {
+	switch {
+	case m.status != "":
+		return m.status, styleStatus
+	case m.updateVersion != "":
+		return updateNotice(m.updateVersion), styleAccent
+	}
+	return "", styleStatus
 }
 
 // recordInner returns the inner size of the record panel (inside its border).

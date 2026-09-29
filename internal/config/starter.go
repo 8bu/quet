@@ -42,6 +42,10 @@ checks:
   # A normalized shape seen this many times gets possible_template.
   template_min_occurrences: 8
 
+update:
+  # Check GitHub for a newer Quet release on every run (the only network access).
+  check: false
+
 # Manual flags file, relative to this file. Without it Quet looks for ./flags.yaml,
 # then flags.yaml next to the corpus, then ~/.config/quet/flags.yaml.
 # flags_file: ./flags.yaml
