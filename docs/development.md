@@ -54,9 +54,9 @@ workflow artifact, so any commit can be tried without cutting a release.
 Releases are automated with [release-please](https://github.com/googleapis/release-please); nobody
 tags by hand.
 
-1. Commit to `main` with [conventional commits](https://www.conventionalcommits.org/): `feat:` bumps
-   the minor version, `fix:` and `perf:` bump the patch, and `chore:`, `docs:`, `test:`, `refactor:`,
-   `ci:` and `build:` release nothing.
+1. Commit to `main` with [conventional commits](https://www.conventionalcommits.org/). Below 1.0,
+   `feat:`, `fix:` and `perf:` bump the patch version and a breaking change (`feat!:`) bumps the
+   minor. `chore:`, `docs:`, `test:`, `refactor:`, `ci:` and `build:` release nothing.
 2. release-please keeps one Release PR open (`chore: release x.y.z`). It updates `CHANGELOG.md` from
    the commit subjects and bumps the version in `internal/version/version.go` and
    `.release-please-manifest.json`.
@@ -67,7 +67,7 @@ tags by hand.
 
 To re-publish a tag, run the Publish workflow by hand from the Actions tab with that tag. Uploads use
 `--clobber`, so re-running replaces the assets. It builds from the tagged tree, so it only works for
-tags that contain `install.sh` — 0.2.0 onwards, not `v0.1.0`.
+tags that contain `install.sh`: 0.1.1 onwards, not `v0.1.0`.
 
 One-time repository setup:
 

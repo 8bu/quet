@@ -1,8 +1,9 @@
 # Versioned releases. release-please (manifest mode) keeps one open Release PR
 # on main; merging it tags v<version>, writes the GitHub Release, and bumps the
 # version in CHANGELOG.md and internal/version/version.go. Conventional commit
-# types drive the bump: feat → minor, fix/perf → patch, hidden types → no
-# release at all. Below 1.0 a breaking change bumps minor (bump-minor-pre-major).
+# types drive the bump. Below 1.0: feat/fix/perf → patch
+# (bump-patch-for-minor-pre-major), breaking → minor (bump-minor-pre-major).
+# Hidden types release nothing.
 #
 # - `release`: runs on every push to main and either opens/updates the Release
 #   PR or, when that PR was just merged, creates the release.

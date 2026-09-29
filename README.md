@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/8bu/quet/main/install.sh | sh
 
 The script downloads the latest release binary, verifies it against the release's `SHA256SUMS`, and
 installs it to `/usr/local/bin` (or `~/.local/bin` when that isn't writable). Re-run it to upgrade;
-set `QUET_VERSION=0.2.0` to pin a version or `QUET_INSTALL_DIR` to choose where it goes.
+set `QUET_VERSION=0.1.1` to pin a version or `QUET_INSTALL_DIR` to choose where it goes.
 
 From source, with Go 1.26+: `make install` in a checkout puts `quet` in `$GOPATH/bin`.
 

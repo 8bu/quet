@@ -7,7 +7,7 @@
 # release's SHA256SUMS, and installs it as `quet`. Re-running upgrades.
 #
 # Environment:
-#   QUET_VERSION       version to install, e.g. 0.2.0 (default: the latest release)
+#   QUET_VERSION       version to install, e.g. 0.1.1 (default: the latest release)
 #   QUET_INSTALL_DIR   install directory (default: /usr/local/bin when writable,
 #                      otherwise ~/.local/bin)
 #   QUET_RELEASES_URL  releases base URL, for mirrors
