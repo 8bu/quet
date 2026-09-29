@@ -289,6 +289,34 @@ func TestViewRendersWithoutOverflow(t *testing.T) {
 	}
 }
 
+func TestFitRecordCollapsesToContent(t *testing.T) {
+	base := computeLayout(120, 60) // recordH 42 (the max), detailsH 18
+	tests := []struct {
+		name        string
+		l           layout
+		rows        int
+		wantRecordH int
+	}{
+		{"one line shrinks to borders plus one row", base, 1, 3},
+		{"no rows still keeps one row", base, 0, 3},
+		{"five lines", base, 5, 7},
+		{"long text is capped at the max", base, 100, base.recordH},
+		{"text exactly filling the max is unchanged", base, base.recordH - 2, base.recordH},
+		{"no details panel: nothing to hand rows to", layout{rightW: 40, recordH: 5}, 1, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.l.fitRecord(tt.rows)
+			if got.recordH != tt.wantRecordH {
+				t.Errorf("recordH = %d, want %d", got.recordH, tt.wantRecordH)
+			}
+			if got.recordH+got.detailsH != tt.l.recordH+tt.l.detailsH {
+				t.Errorf("column height changed: %d+%d, want %d", got.recordH, got.detailsH, tt.l.recordH+tt.l.detailsH)
+			}
+		})
+	}
+}
+
 // enterMode switches m into mode the way the UI does.
 func enterMode(t *testing.T, m model, mode Mode) model {
 	t.Helper()

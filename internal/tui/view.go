@@ -53,6 +53,9 @@ func (m model) panels(w, h int) string {
 	left := box(panelCorpus.title(), m.focus == panelCorpus, l.leftW, h, leftRows, leftSel)
 
 	recRows, recSel := m.recordContent(l.rightW, l.recordH)
+	if m.mode == ModeReview {
+		l = l.fitRecord(len(recRows))
+	}
 	right := box(panelRecord.title(), m.focus == panelRecord, l.rightW, l.recordH, recRows, recSel)
 	if l.detailsH > 0 {
 		detRows, detSel := m.detailsContent(l.rightW, l.detailsH)

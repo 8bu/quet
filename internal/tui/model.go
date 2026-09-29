@@ -225,6 +225,23 @@ func computeLayout(w, h int) layout {
 	return l
 }
 
+// fitRecord shrinks the record panel to hold rows content lines plus its
+// border, never growing past the computed height (which acts as the maximum),
+// and gives the freed rows to the details panel so it sits right under the
+// text instead of at the bottom of a mostly empty box.
+func (l layout) fitRecord(rows int) layout {
+	if l.detailsH == 0 {
+		return l
+	}
+	want := max(rows, 1) + 2
+	if want >= l.recordH {
+		return l
+	}
+	l.detailsH += l.recordH - want
+	l.recordH = want
+	return l
+}
+
 // bodyDimensions returns the drawing width and the body height (screen minus
 // footer and the optional status row).
 func (m model) bodyDimensions() (int, int) {
