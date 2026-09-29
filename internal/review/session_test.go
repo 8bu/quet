@@ -63,14 +63,6 @@ func autoAdvanceConfig() config.Config {
 	return cfg
 }
 
-func flagNames(flags []checks.Flag) []string {
-	names := make([]string, 0, len(flags))
-	for _, f := range flags {
-		names = append(names, f.Name)
-	}
-	return names
-}
-
 func TestOpenStartsOnFirstUnreviewed(t *testing.T) {
 	path := writeCorpus(t, corpusLines)
 	s := openSession(t, path, autoAdvanceConfig())
@@ -257,8 +249,8 @@ func TestReconfigureRerunsChecksKeepingReviewState(t *testing.T) {
 	if _, err := s.SetStatus(Approved); err != nil { // n1 -> n2
 		t.Fatalf("SetStatus: %v", err)
 	}
-	if hasFlagName(s.AutoFlags(0), checks.TooLong) {
-		t.Fatalf("n1 flagged too_long before reconfigure: %v", flagNames(s.AutoFlags(0)))
+	if hasDiagnostic(s.Diagnostics(0), checks.TooLong) {
+		t.Fatalf("n1 has too_long before reconfigure: %v", diagnosticNames(s.Diagnostics(0)))
 	}
 	counts := s.Counts()
 	pos, n := s.Position()
@@ -267,13 +259,13 @@ func TestReconfigureRerunsChecksKeepingReviewState(t *testing.T) {
 	cfg.Checks.MaxChars = 12 // n1 has 15 chars; n2, n3 and n4 have 10
 	s.Reconfigure(config.Settings{Config: cfg, Flags: testFlagDefs})
 
-	if !hasFlagName(s.AutoFlags(0), checks.TooLong) {
-		t.Fatalf("n1 auto flags = %v, want too_long", flagNames(s.AutoFlags(0)))
+	if !hasDiagnostic(s.Diagnostics(0), checks.TooLong) {
+		t.Fatalf("n1 diagnostics = %v, want too_long", diagnosticNames(s.Diagnostics(0)))
 	}
-	if hasFlagName(s.AutoFlags(1), checks.TooLong) {
-		t.Fatalf("n2 auto flags = %v, want no too_long", flagNames(s.AutoFlags(1)))
+	if hasDiagnostic(s.Diagnostics(1), checks.TooLong) {
+		t.Fatalf("n2 diagnostics = %v, want no too_long", diagnosticNames(s.Diagnostics(1)))
 	}
-	if got := facetValue(s.AutoFlagFacets(), checks.TooLong); got != 1 {
+	if got := facetValue(s.DiagnosticFacets(), checks.TooLong); got != 1 {
 		t.Fatalf("too_long facet = %d, want 1", got)
 	}
 	if got := s.State(0).EffectiveStatus(); got != Approved {
@@ -345,13 +337,13 @@ func TestReconfigureReplacesFlagTaxonomy(t *testing.T) {
 	}
 }
 
-func TestEditRevertAndAutoFlags(t *testing.T) {
+func TestEditRevertAndDiagnostics(t *testing.T) {
 	path := writeCorpus(t, corpusLines)
 	s := openSession(t, path, testConfig())
 
 	s.Goto(2) // n3: "aaaaaaaaaa" -> repeated_chars from the corpus analysis
-	if !hasFlagName(s.AutoFlags(2), checks.RepeatedChars) {
-		t.Fatalf("AutoFlags(2) = %v, want repeated_chars", flagNames(s.AutoFlags(2)))
+	if !hasDiagnostic(s.Diagnostics(2), checks.RepeatedChars) {
+		t.Fatalf("Diagnostics(2) = %v, want repeated_chars", diagnosticNames(s.Diagnostics(2)))
 	}
 	if err := s.SaveEdit("aaa bbb"); err != nil {
 		t.Fatalf("SaveEdit: %v", err)
@@ -362,8 +354,8 @@ func TestEditRevertAndAutoFlags(t *testing.T) {
 	if st := s.State(2); !st.Edited() || st.EditedText == nil || *st.EditedText != "aaa bbb" {
 		t.Fatalf("State(2) = %+v, want edited", st)
 	}
-	if hasFlagName(s.AutoFlags(2), checks.RepeatedChars) {
-		t.Fatalf("AutoFlags(2) = %v, want recomputed flags without repeated_chars", flagNames(s.AutoFlags(2)))
+	if hasDiagnostic(s.Diagnostics(2), checks.RepeatedChars) {
+		t.Fatalf("Diagnostics(2) = %v, want recomputed diagnostics without repeated_chars", diagnosticNames(s.Diagnostics(2)))
 	}
 	if got := s.Record(2).Text; got != "aaaaaaaaaa" {
 		t.Fatalf("original text was destroyed: %q", got)
@@ -372,16 +364,16 @@ func TestEditRevertAndAutoFlags(t *testing.T) {
 		t.Fatalf("Counts = %+v", got)
 	}
 
-	// Editing keeps the corpus-wide duplicate flag of the record.
+	// Editing keeps the corpus-wide duplicate diagnostic of the record.
 	s.Goto(3)
 	if err := s.SaveEdit("CK Nam 2tr edited"); err != nil {
 		t.Fatalf("SaveEdit: %v", err)
 	}
-	if !hasFlagName(s.AutoFlags(3), checks.Duplicate) {
-		t.Fatalf("AutoFlags(3) = %v, want the corpus-wide duplicate flag kept", flagNames(s.AutoFlags(3)))
+	if !hasDiagnostic(s.Diagnostics(3), checks.Duplicate) {
+		t.Fatalf("Diagnostics(3) = %v, want the corpus-wide duplicate diagnostic kept", diagnosticNames(s.Diagnostics(3)))
 	}
 
-	// Revert restores the original text and the load-time flags.
+	// Revert restores the original text and the load-time diagnostics.
 	if err := s.RevertEdit(); err != nil {
 		t.Fatalf("RevertEdit: %v", err)
 	}
@@ -436,8 +428,8 @@ func TestUndoRestoresRevertedEdit(t *testing.T) {
 	if got := s.Counts().Edited; got != 1 {
 		t.Fatalf("Edited = %d after undo, want 1", got)
 	}
-	if hasFlagName(s.AutoFlags(2), checks.RepeatedChars) {
-		t.Fatalf("AutoFlags(2) = %v, want recomputed flags for the restored edit", flagNames(s.AutoFlags(2)))
+	if hasDiagnostic(s.Diagnostics(2), checks.RepeatedChars) {
+		t.Fatalf("Diagnostics(2) = %v, want recomputed diagnostics for the restored edit", diagnosticNames(s.Diagnostics(2)))
 	}
 }
 
@@ -481,8 +473,9 @@ func TestManualFlagsAndFacets(t *testing.T) {
 	if got, want := facetString(s.SuggestedFacets()), "slang=1,typo=1"; got != want {
 		t.Fatalf("SuggestedFacets = %s, want %s", got, want)
 	}
-	if got := facetValue(s.AutoFlagFacets(), checks.Duplicate); got != 2 {
-		t.Fatalf("AutoFlagFacets[duplicate] = %d, want 2", got)
+	// Only diagnostics present in the corpus are listed (no zero counts).
+	if got, want := facetString(s.DiagnosticFacets()), "duplicate=2,repeated_chars=1"; got != want {
+		t.Fatalf("DiagnosticFacets = %s, want %s", got, want)
 	}
 }
 
@@ -620,12 +613,12 @@ func TestFilterViewSnapshotAndGoto(t *testing.T) {
 	if got := s.SetFilter(Filter{Kind: FilterSuggested, Value: "typo"}); got != 1 {
 		t.Fatalf("SetFilter(suggested:typo) = %d, want 1", got)
 	}
-	if got := s.SetFilter(Filter{Kind: FilterAuto, Value: checks.Duplicate}); got != 2 {
-		t.Fatalf("SetFilter(auto:duplicate) = %d, want 2", got)
+	if got := s.SetFilter(Filter{Kind: FilterDiagnostic, Value: checks.Duplicate}); got != 2 {
+		t.Fatalf("SetFilter(diagnostic:duplicate) = %d, want 2", got)
 	}
-	// n2/n4 are duplicates, n3 has repeated chars.
-	if got := s.SetFilter(Filter{Kind: FilterAuto, Value: ""}); got != 3 {
-		t.Fatalf("SetFilter(auto) = %d, want 3", got)
+	// n2/n4 are duplicates; n3's edit "aaa bbb" dropped its repeated chars.
+	if got := s.SetFilter(Filter{Kind: FilterDiagnostic, Value: ""}); got != 2 {
+		t.Fatalf("SetFilter(diagnostic) = %d, want 2", got)
 	}
 
 	// Navigating the view.
@@ -657,8 +650,8 @@ func TestFilterParseRoundTrip(t *testing.T) {
 		{"needs-review", Filter{Kind: FilterStatus, Value: "needs_review"}},
 		{"needs review", Filter{Kind: FilterStatus, Value: "needs_review"}},
 		{"edited", Filter{Kind: FilterEdited}},
-		{"auto", Filter{Kind: FilterAuto}},
-		{"auto:duplicate", Filter{Kind: FilterAuto, Value: "duplicate"}},
+		{"diagnostic", Filter{Kind: FilterDiagnostic}},
+		{"diagnostic:duplicate", Filter{Kind: FilterDiagnostic, Value: "duplicate"}},
 		{"manual", Filter{Kind: FilterManual}},
 		{"manual:slang", Filter{Kind: FilterManual, Value: "slang"}},
 		{"suggested", Filter{Kind: FilterSuggested}},
@@ -682,8 +675,10 @@ func TestFilterParseRoundTrip(t *testing.T) {
 			t.Errorf("round trip %q: %+v (%v), want %+v", c.in, round, err, c.want)
 		}
 	}
-	if got, err := ParseFilter("bogus"); err == nil {
-		t.Errorf("ParseFilter(bogus) = %+v, want error", got)
+	for _, bad := range []string{"bogus", "auto", "auto:duplicate"} {
+		if got, err := ParseFilter(bad); err == nil {
+			t.Errorf("ParseFilter(%q) = %+v, want error", bad, got)
+		}
 	}
 }
 
@@ -729,8 +724,8 @@ func TestUndoRestoresStatusEditAndFlags(t *testing.T) {
 	if got := s.Counts().Edited; got != 0 {
 		t.Fatalf("Edited = %d after undo, want 0", got)
 	}
-	if !hasFlagName(s.AutoFlags(2), checks.RepeatedChars) {
-		t.Fatalf("AutoFlags(2) = %v after undo, want the load-time flags back", flagNames(s.AutoFlags(2)))
+	if !hasDiagnostic(s.Diagnostics(2), checks.RepeatedChars) {
+		t.Fatalf("Diagnostics(2) = %v after undo, want the load-time diagnostics back", diagnosticNames(s.Diagnostics(2)))
 	}
 
 	if ok, idx, err = s.Undo(); err != nil || !ok || idx != 1 {
@@ -954,8 +949,8 @@ func TestLargeCorpusLoadsAndFilters(t *testing.T) {
 	if got := len(s.Search("note 19998", 0)); got != 1 {
 		t.Fatalf("Search = %d hits, want 1", got)
 	}
-	if got := len(s.AutoFlagFacets()); got == 0 {
-		t.Fatalf("AutoFlagFacets is empty")
+	if got := len(s.DiagnosticFacets()); got == 0 {
+		t.Fatalf("DiagnosticFacets is empty")
 	}
 }
 

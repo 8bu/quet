@@ -24,7 +24,6 @@ type quetMeta struct {
 	Edited         bool     `json:"edited"`
 	OriginalText   *string  `json:"original_text,omitempty"` // only when the record was edited
 	ManualFlags    []string `json:"manual_flags"`
-	AutoFlags      []string `json:"auto_flags"` // names only
 	SuggestedFlags []string `json:"suggested_flags"`
 }
 
@@ -59,7 +58,7 @@ func Write(s *review.Session, w io.Writer, opt Options) (int, error) {
 		rec := s.Record(i)
 		var extra []corpus.KV
 		if opt.WithReview {
-			value, err := marshalMeta(s, i, rec, state)
+			value, err := marshalMeta(rec, state)
 			if err != nil {
 				return written, err
 			}
@@ -83,22 +82,18 @@ func Write(s *review.Session, w io.Writer, opt Options) (int, error) {
 	return written, nil
 }
 
-// marshalMeta builds the "quet" object for record i as compact, HTML-unescaped JSON.
-func marshalMeta(s *review.Session, i int, rec *corpus.Record, state review.State) (json.RawMessage, error) {
+// marshalMeta builds the "quet" object for a record as compact, HTML-unescaped JSON.
+func marshalMeta(rec *corpus.Record, state review.State) (json.RawMessage, error) {
 	meta := quetMeta{
 		ID:             rec.ID,
 		Status:         string(state.EffectiveStatus()),
 		Edited:         state.Edited(),
 		ManualFlags:    nonNil(state.ManualFlags),
-		AutoFlags:      []string{},
 		SuggestedFlags: nonNil(rec.SuggestedFlags),
 	}
 	if state.Edited() {
 		original := rec.Text
 		meta.OriginalText = &original
-	}
-	for _, f := range s.AutoFlags(i) {
-		meta.AutoFlags = append(meta.AutoFlags, f.Name)
 	}
 
 	var buf bytes.Buffer

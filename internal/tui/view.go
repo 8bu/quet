@@ -8,7 +8,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// view draws the whole screen: body, optional status message, footer.
+// view draws the whole screen: body, optional status row (transient status or
+// update notice), footer.
 func (m model) view() string {
 	w, h := m.width, m.height
 	if w <= 0 {
@@ -25,8 +26,8 @@ func (m model) view() string {
 	if bw, bh := m.bodyDimensions(); bh > 0 {
 		rows = append(rows, strings.Split(m.body(bw, bh), "\n")...)
 	}
-	if m.status != "" && len(rows)+1 < h {
-		rows = append(rows, truncateLine(styleStatus.Render(m.status), w))
+	if text, style := m.statusText(); text != "" && len(rows)+1 < h {
+		rows = append(rows, truncateLine(style.Render(text), w))
 	}
 	rows = append(rows, footer)
 	if len(rows) > h {
@@ -172,7 +173,7 @@ func (m model) recordContent(w, h int) ([]string, int) {
 	return wrapRows([]string{text}, w-2), -1
 }
 
-// detailsContent renders the current record's metadata and warnings.
+// detailsContent renders the current record's metadata, flags and diagnostics.
 func (m model) detailsContent(w, h int) ([]string, int) {
 	if w < 2 || h < 2 {
 		return nil, -1
@@ -188,19 +189,15 @@ func (m model) detailsContent(w, h int) ([]string, int) {
 	st := m.sess.State(cur)
 
 	rows := []string{"id: " + r.ID, metaLine("source", r.Source), metaLine("batch", r.Batch)}
-	auto := m.sess.AutoFlags(cur)
-	names := make([]string, 0, len(auto))
-	for _, f := range auto {
-		names = append(names, f.Name)
-	}
-	rows = append(rows, "auto: "+listOrDash(names))
-	for _, f := range auto {
-		if f.Detail != "" {
-			rows = append(rows, "  "+f.Detail)
-		}
-	}
 	rows = append(rows, "manual: "+listOrDash(st.ManualFlags))
 	rows = append(rows, "suggested: "+listOrDash(r.SuggestedFlags))
+	if diags := m.sess.Diagnostics(cur); len(diags) > 0 {
+		names := make([]string, 0, len(diags))
+		for _, d := range diags {
+			names = append(names, d.Name)
+		}
+		rows = append(rows, "diagnostics: "+strings.Join(names, ", "))
+	}
 	if st.Edited() {
 		rows = append(rows, "edited")
 	}

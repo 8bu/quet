@@ -1,4 +1,4 @@
-// Package checks implements deterministic, explainable auto quality flags. Flags are warnings only.
+// Package checks implements deterministic, explainable quality diagnostics. Diagnostics are informational only and never part of review state.
 package checks
 
 import (
@@ -11,19 +11,18 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Auto flag names.
+// Diagnostic names.
 const (
 	Duplicate        = "duplicate"
 	TooLong          = "too_long"
 	Empty            = "empty"
 	RepeatedChars    = "repeated_chars"
 	WeirdSymbols     = "weird_symbols"
-	MissingAmount    = "missing_amount"
 	PossibleTemplate = "possible_template"
 )
 
-// AllFlags lists auto flag names in display order.
-var AllFlags = []string{Duplicate, TooLong, Empty, RepeatedChars, WeirdSymbols, MissingAmount, PossibleTemplate}
+// All lists diagnostic names in display order.
+var All = []string{Duplicate, TooLong, Empty, RepeatedChars, WeirdSymbols, PossibleTemplate}
 
 // Markers substituted by TemplatePattern.
 const (
@@ -98,29 +97,29 @@ func withDefaults(opt Options) Options {
 	return opt
 }
 
-// Flag is one auto flag with a human-readable explanation, e.g. {PossibleTemplate, "pattern: cho <TOKEN> vay <AMOUNT> (87 occurrences)"}.
-type Flag struct {
+// Diagnostic is one diagnostic with a human-readable explanation, e.g. {PossibleTemplate, "pattern: cho <TOKEN> vay <AMOUNT> (87 occurrences)"}.
+type Diagnostic struct {
 	Name   string
 	Detail string
 }
 
 // Analysis is the corpus-wide result, indexed by record index.
 type Analysis struct {
-	Flags     [][]Flag       // per record
-	DupGroup  []int32        // per record: index into Groups, or -1
-	Groups    [][]int        // duplicate groups (record indices, ascending), each len >= 2
-	Pattern   []string       // per record template pattern ("" when the text is empty or has no substitution)
-	Templates map[string]int // qualified pattern -> occurrences
+	Diagnostics [][]Diagnostic // per record
+	DupGroup    []int32        // per record: index into Groups, or -1
+	Groups      [][]int        // duplicate groups (record indices, ascending), each len >= 2
+	Pattern     []string       // per record template pattern ("" when the text is empty or has no substitution)
+	Templates   map[string]int // qualified pattern -> occurrences
 }
 
 // Analyze runs all checks over texts (final texts, index-aligned with records). Must handle 100k records quickly.
 func Analyze(texts []string, opt Options) *Analysis {
 	opt = withDefaults(opt)
 	a := &Analysis{
-		Flags:     make([][]Flag, len(texts)),
-		DupGroup:  make([]int32, len(texts)),
-		Pattern:   make([]string, len(texts)),
-		Templates: make(map[string]int),
+		Diagnostics: make([][]Diagnostic, len(texts)),
+		DupGroup:    make([]int32, len(texts)),
+		Pattern:     make([]string, len(texts)),
+		Templates:   make(map[string]int),
 	}
 
 	// Per-record checks and duplicate keys in one pass.
@@ -128,7 +127,7 @@ func Analyze(texts []string, opt Options) *Analysis {
 	var groups [][]int
 	for i, text := range texts {
 		normalized := Normalize(text)
-		a.Flags[i] = single(normalized, opt)
+		a.Diagnostics[i] = single(normalized, opt)
 		a.DupGroup[i] = -1
 		if normalized == "" {
 			continue
@@ -149,11 +148,11 @@ func Analyze(texts []string, opt Options) *Analysis {
 		detail := fmt.Sprintf("%d records share this text", len(members))
 		for _, i := range members {
 			a.DupGroup[i] = g
-			a.Flags[i] = append([]Flag{{Name: Duplicate, Detail: detail}}, a.Flags[i]...)
+			a.Diagnostics[i] = append([]Diagnostic{{Name: Duplicate, Detail: detail}}, a.Diagnostics[i]...)
 		}
 	}
 
-	// Template counts. Patterns without <AMOUNT>/<TOKEN> would flag every text
+	// Template counts. Patterns without <AMOUNT>/<TOKEN> would match every text
 	// that merely repeats a number, so only substituted patterns qualify.
 	counts := make(map[string]int)
 	for i, text := range texts {
@@ -174,7 +173,7 @@ func Analyze(texts []string, opt Options) *Analysis {
 			continue
 		}
 		a.Templates[p] = c
-		a.Flags[i] = append(a.Flags[i], Flag{
+		a.Diagnostics[i] = append(a.Diagnostics[i], Diagnostic{
 			Name:   PossibleTemplate,
 			Detail: fmt.Sprintf("pattern: %s (%d occurrences)", p, c),
 		})
@@ -182,33 +181,29 @@ func Analyze(texts []string, opt Options) *Analysis {
 	return a
 }
 
-// Single runs per-record checks only (too_long, empty, repeated_chars, weird_symbols, missing_amount).
-func Single(text string, opt Options) []Flag {
+// Single runs per-record checks only (too_long, empty, repeated_chars, weird_symbols).
+func Single(text string, opt Options) []Diagnostic {
 	return single(Normalize(text), withDefaults(opt))
 }
 
 // single runs the per-record checks over an already normalized text and
-// defaults-filled options: rune counts and the amount scan use the normalized
-// text, so trailing whitespace cannot make a record too long. Flags come back in
-// AllFlags order.
-func single(normalized string, opt Options) []Flag {
-	var flags []Flag
+// defaults-filled options: rune counts use the normalized text, so trailing
+// whitespace cannot make a record too long. Diagnostics come back in All order.
+func single(normalized string, opt Options) []Diagnostic {
+	var diags []Diagnostic
 	if n := utf8RuneCount(normalized); n > opt.MaxChars {
-		flags = append(flags, Flag{Name: TooLong, Detail: fmt.Sprintf("%d chars, limit %d", n, opt.MaxChars)})
+		diags = append(diags, Diagnostic{Name: TooLong, Detail: fmt.Sprintf("%d chars, limit %d", n, opt.MaxChars)})
 	}
 	if normalized == "" {
-		flags = append(flags, Flag{Name: Empty, Detail: "text is empty"})
+		diags = append(diags, Diagnostic{Name: Empty, Detail: "text is empty"})
 	}
 	if r, n, ok := repeatedRun(normalized, opt.RepeatedCharThreshold); ok {
-		flags = append(flags, Flag{Name: RepeatedChars, Detail: fmt.Sprintf("%q repeated %d times", string(r), n)})
+		diags = append(diags, Diagnostic{Name: RepeatedChars, Detail: fmt.Sprintf("%q repeated %d times", string(r), n)})
 	}
 	if ratio := symbolRatio(normalized); ratio > opt.WeirdSymbolRatio {
-		flags = append(flags, Flag{Name: WeirdSymbols, Detail: fmt.Sprintf("ratio %.2f", ratio)})
+		diags = append(diags, Diagnostic{Name: WeirdSymbols, Detail: fmt.Sprintf("ratio %.2f", ratio)})
 	}
-	if normalized != "" && !hasAmount(normalized) {
-		flags = append(flags, Flag{Name: MissingAmount, Detail: "no amount detected"})
-	}
-	return flags
+	return diags
 }
 
 // Normalize: NFC, trim, lowercase, collapse whitespace.
@@ -246,21 +241,6 @@ func utf8RuneCount(s string) int {
 	return n
 }
 
-// HasAmount reports whether s contains a recognizable money amount (50k, 2tr, 1tr2, 2 triệu, 2 củ, 5 lít, 1.5tr, 1.2m, 500000, 500.000, 500,000, $20, 20usd, 200k vnd...).
-func HasAmount(s string) bool {
-	return hasAmount(collapse(s))
-}
-
-// hasAmount reports whether the collapsed text n contains an amount.
-func hasAmount(n string) bool {
-	for _, re := range amountRes {
-		if re.MatchString(n) {
-			return true
-		}
-	}
-	return false
-}
-
 // HasRepeatedChars reports a run of the same rune (letters or symbols) of length >= threshold. Runs compare case-insensitively; digits and whitespace never form a run.
 func HasRepeatedChars(s string, threshold int) bool {
 	_, _, ok := repeatedRun(collapse(s), threshold)
@@ -269,7 +249,7 @@ func HasRepeatedChars(s string, threshold int) bool {
 
 // repeatedRun returns the first rune run of length >= threshold and that length.
 // Runes compare case-insensitively; digits and whitespace never form a run, so
-// "aaaaaaa" or "????????" are flagged but a number like 500000 is not. A
+// "aaaaaaa" or "????????" form a run but a number like 500000 does not. A
 // threshold <= 0 means the default of 5.
 func repeatedRun(s string, threshold int) (rune, int, bool) {
 	if threshold <= 0 {

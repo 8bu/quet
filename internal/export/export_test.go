@@ -155,8 +155,10 @@ func TestWriteAndToFile(t *testing.T) {
 		if !reflect.DeepEqual(meta["suggested_flags"], []any{"synthetic-looking"}) {
 			t.Errorf("suggested_flags = %v", meta["suggested_flags"])
 		}
-		if _, ok := meta["auto_flags"]; !ok {
-			t.Errorf("auto_flags missing from %v", meta)
+		for _, key := range []string{"auto_flags", "diagnostics"} {
+			if _, ok := meta[key]; ok {
+				t.Errorf("quet metadata carries %q: %v", key, meta)
+			}
 		}
 	})
 

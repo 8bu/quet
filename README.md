@@ -9,8 +9,9 @@ generate → quet → review → export
 ```
 
 Open a corpus, approve or reject each record with a single key, and export the records you kept.
-Everything is local: one static binary and one SQLite sidecar file next to your corpus. No network
-and no telemetry, and the source file is never modified.
+Everything is local: one static binary and one SQLite sidecar file next to your corpus. No
+telemetry, no network access unless you run `quet update` or opt in to `update.check`, and the
+source file is never modified.
 
 ## Install
 
@@ -21,8 +22,9 @@ curl -fsSL https://raw.githubusercontent.com/8bu/quet/main/install.sh | sh
 ```
 
 The script downloads the latest release binary, verifies it against the release's `SHA256SUMS`, and
-installs it to `/usr/local/bin` (or `~/.local/bin` when that isn't writable). Re-run it to upgrade;
-set `QUET_VERSION=0.1.1` to pin a version or `QUET_INSTALL_DIR` to choose where it goes.
+installs it to `/usr/local/bin` (or `~/.local/bin` when that isn't writable). To upgrade, run
+`quet update` (re-running the script still works); set `QUET_VERSION=0.1.1` to pin a version or
+`QUET_INSTALL_DIR` to choose where it goes.
 
 From source, with Go 1.26+: `make install` in a checkout puts `quet` in `$GOPATH/bin`.
 
@@ -42,16 +44,16 @@ When you're done:
 quet export examples/corpus.jsonl    # writes examples/corpus.approved.jsonl
 ```
 
-To customise checks and manual flags, `quet init` writes a starter `quet.yaml` and `flags.yaml`
-(`c` in the TUI edits the config and reloads it).
+To customise diagnostic thresholds and manual flags, `quet init` writes a starter `quet.yaml` and
+`flags.yaml` (`c` in the TUI edits the config and reloads it).
 
 ## Documentation
 
 | | |
 | --- | --- |
-| [Usage](docs/usage.md) | Command line, file browser, `init`, `stats` |
+| [Usage](docs/usage.md) | Command line, file browser, `init`, `stats`, `update` |
 | [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
-| [Auto checks](docs/checks.md) | The seven warnings Quet computes and their thresholds |
+| [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |
 | [Configuration](docs/configuration.md) | `quet.yaml`, `flags.yaml` and `quet init` |
 | [Export](docs/export.md) | Presets, output files, review metadata |

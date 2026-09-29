@@ -20,7 +20,7 @@ The longhand equivalents are `go build -o quet ./cmd/quet`, `go test ./...`, `go
 cmd/quet/                command line entry point and argument parsing
 internal/corpus/         .jsonl/.json/.txt loading, stable ids, JSON re-encoding
 internal/config/         quet.yaml and flags.yaml
-internal/checks/         the seven deterministic auto checks
+internal/checks/         the six deterministic diagnostics
 internal/review/         review session: states, filters, undo, counts, search
 internal/storage/        SQLite sidecar (WAL, immediate writes)
 internal/export/         the five export presets, atomic file writing

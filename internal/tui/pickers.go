@@ -79,7 +79,7 @@ func facetCounts(facets []review.Facet) map[string]int {
 }
 
 // buildFilterRows lists every filter value with its count: statuses, edited,
-// then auto/manual/suggested flags, sources and batches.
+// diagnostics present in the corpus, manual/suggested flags, sources and batches.
 func buildFilterRows(s *review.Session) []filterRow {
 	rows := make([]filterRow, 0, 32)
 	c := s.Counts()
@@ -98,13 +98,10 @@ func buildFilterRows(s *review.Session) []filterRow {
 	add("needs_review", "needs_review", c.NeedsReview)
 	add("edited", "edited", c.Edited)
 
-	auto := facetCounts(s.AutoFlagFacets())
-	for _, name := range checks.AllFlags {
-		add("auto:"+name, "auto:"+name, auto[name])
-	}
-	for _, name := range slices.Sorted(maps.Keys(auto)) {
-		if !slices.Contains(checks.AllFlags, name) {
-			add("auto:"+name, "auto:"+name, auto[name])
+	diag := facetCounts(s.DiagnosticFacets())
+	for _, name := range checks.All {
+		if n := diag[name]; n > 0 {
+			add("diagnostic:"+name, "diagnostic:"+name, n)
 		}
 	}
 

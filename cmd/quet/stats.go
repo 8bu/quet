@@ -26,7 +26,7 @@ func runStats(cmd command, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%-13s%7d\n", "Needs review:", counts.NeedsReview)
 	fmt.Fprintf(stdout, "%-13s%7d\n", "Unreviewed:", counts.Unreviewed)
 	fmt.Fprintf(stdout, "%-13s%7d\n", "Edited:", counts.Edited)
-	if summary := autoFlagSummary(session); summary != "" {
+	if summary := diagnosticSummary(session); summary != "" {
 		fmt.Fprintln(stdout, summary)
 	}
 	fmt.Fprintf(stdout, "Corpus: %s\n", cmd.corpus)
@@ -34,10 +34,10 @@ func runStats(cmd command, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// autoFlagSummary counts records per auto flag, e.g.
-// "Auto flags: duplicate 2, empty 1". Empty when no record carries an auto flag.
-func autoFlagSummary(s *review.Session) string {
-	order := append([]string(nil), checks.AllFlags...)
+// diagnosticSummary counts records per diagnostic, e.g.
+// "Diagnostics: duplicate 2, empty 1". Empty when no record has a diagnostic.
+func diagnosticSummary(s *review.Session) string {
+	order := append([]string(nil), checks.All...)
 	seen := make(map[string]bool, len(order))
 	for _, name := range order {
 		seen[name] = true
@@ -45,12 +45,12 @@ func autoFlagSummary(s *review.Session) string {
 	counts := make(map[string]int)
 
 	for i := range s.Len() {
-		for _, flag := range s.AutoFlags(i) {
-			if !seen[flag.Name] {
-				seen[flag.Name] = true
-				order = append(order, flag.Name)
+		for _, d := range s.Diagnostics(i) {
+			if !seen[d.Name] {
+				seen[d.Name] = true
+				order = append(order, d.Name)
 			}
-			counts[flag.Name]++
+			counts[d.Name]++
 		}
 	}
 	if len(counts) == 0 {
@@ -63,5 +63,5 @@ func autoFlagSummary(s *review.Session) string {
 			parts = append(parts, fmt.Sprintf("%s %d", name, n))
 		}
 	}
-	return "Auto flags: " + strings.Join(parts, ", ")
+	return "Diagnostics: " + strings.Join(parts, ", ")
 }

@@ -12,6 +12,7 @@ Usage:
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
   quet init [--global] [--force]
+  quet update [--check]
   quet help
 
 Without a corpus, or given a directory, quet opens a file browser: w/s move,
@@ -21,11 +22,14 @@ quet init writes a starter quet.yaml and flags.yaml to the current directory
 (--global: ~/.config/quet/config.yaml and flags.yaml). Existing files are
 never overwritten without --force.
 
+quet update replaces this binary with the latest release after verifying it
+against the release's SHA256SUMS; --check only reports whether one exists.
+
 Flags (any position; --flag value and --flag=value are both accepted):
   --config <path>       config file to use instead of ./quet.yaml
   --flags-file <path>   manual flag definitions instead of ./flags.yaml
   --filter <name>       start filtered: all, unreviewed, approved, rejected,
-                        needs_review, edited, auto[:name], manual[:name],
+                        needs_review, edited, diagnostic[:name], manual[:name],
                         suggested[:name], source:<x>, batch:<x>
   --no-skip-reviewed    stay on records that were already reviewed
   -h, --help            show this help
@@ -48,6 +52,7 @@ Keys:
   e edit   f flags   c config   / search   tab change panel   1/2/3 panel
   ? help   esc back/close   enter select   : commands   q quit
 
-Data stays local: no telemetry, no network.
+Data stays local: no telemetry; the network is only used by quet update or
+when update.check is on.
 `
 }

@@ -16,14 +16,14 @@ import (
 type FilterKind string
 
 const (
-	FilterAll       FilterKind = "all"
-	FilterStatus    FilterKind = "status" // Value: a ReviewStatus
-	FilterEdited    FilterKind = "edited"
-	FilterAuto      FilterKind = "auto"      // Value: auto flag name, "" = any
-	FilterManual    FilterKind = "manual"    // Value: manual flag name, "" = any
-	FilterSuggested FilterKind = "suggested" // Value: suggested flag name, "" = any
-	FilterSource    FilterKind = "source"
-	FilterBatch     FilterKind = "batch"
+	FilterAll        FilterKind = "all"
+	FilterStatus     FilterKind = "status" // Value: a ReviewStatus
+	FilterEdited     FilterKind = "edited"
+	FilterDiagnostic FilterKind = "diagnostic" // Value: diagnostic name, "" = any
+	FilterManual     FilterKind = "manual"     // Value: manual flag name, "" = any
+	FilterSuggested  FilterKind = "suggested"  // Value: suggested flag name, "" = any
+	FilterSource     FilterKind = "source"
+	FilterBatch      FilterKind = "batch"
 )
 
 type Filter struct {
@@ -31,7 +31,7 @@ type Filter struct {
 	Value string
 }
 
-// ParseFilter accepts: all | unreviewed | approved | rejected | needs_review | edited | auto[:name] | manual[:name] | suggested[:name] | source:x | batch:x.
+// ParseFilter accepts: all | unreviewed | approved | rejected | needs_review | edited | diagnostic[:name] | manual[:name] | suggested[:name] | source:x | batch:x.
 func ParseFilter(s string) (Filter, error) {
 	name, value, hasValue := strings.Cut(strings.TrimSpace(s), ":")
 	value = strings.TrimSpace(value)
@@ -41,11 +41,11 @@ func ParseFilter(s string) (Filter, error) {
 		return Filter{Kind: FilterAll}, nil
 	case "edited":
 		return Filter{Kind: FilterEdited}, nil
-	case "auto":
+	case "diagnostic":
 		if !hasValue {
-			return Filter{Kind: FilterAuto}, nil
+			return Filter{Kind: FilterDiagnostic}, nil
 		}
-		return Filter{Kind: FilterAuto, Value: value}, nil
+		return Filter{Kind: FilterDiagnostic, Value: value}, nil
 	case "manual":
 		if !hasValue {
 			return Filter{Kind: FilterManual}, nil
@@ -69,10 +69,10 @@ func ParseFilter(s string) (Filter, error) {
 	if st, err := ParseStatus(strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", "_"))); err == nil {
 		return Filter{Kind: FilterStatus, Value: string(st)}, nil
 	}
-	return Filter{}, fmt.Errorf("unknown filter %q (want all, unreviewed, approved, rejected, needs_review, edited, auto[:name], manual[:name], suggested[:name], source:x, batch:x)", s)
+	return Filter{}, fmt.Errorf("unknown filter %q (want all, unreviewed, approved, rejected, needs_review, edited, diagnostic[:name], manual[:name], suggested[:name], source:x, batch:x)", s)
 }
 
-// String is the inverse of ParseFilter (e.g. "unreviewed", "auto:duplicate", "all").
+// String is the inverse of ParseFilter (e.g. "unreviewed", "diagnostic:duplicate", "all").
 func (f Filter) String() string {
 	switch f.Kind {
 	case FilterEdited:
@@ -83,8 +83,8 @@ func (f Filter) String() string {
 			return string(f.Value)
 		}
 		return string(st)
-	case FilterAuto:
-		return withValue("auto", f.Value)
+	case FilterDiagnostic:
+		return withValue("diagnostic", f.Value)
 	case FilterManual:
 		return withValue("manual", f.Value)
 	case FilterSuggested:
@@ -147,15 +147,15 @@ type Session struct {
 	FlagsPath    string // flags file FlagDefs came from, "" when none; set by the caller
 	SkipReviewed bool
 
-	states    []State         // per corpus index; states[i].Status == "" means Unreviewed
-	byID      map[string]int  // record ID -> corpus index
-	loadFlags [][]checks.Flag // corpus-wide analysis flags at load or the last reconfigure, per corpus index
-	view      []int           // filtered snapshot of corpus indices (never rebuilt implicitly)
-	pos       int             // position in view; meaningless when view is empty
-	filter    Filter          // filter that built view
-	counts    Counts          // incremental counters (never scanned per render)
-	started   time.Time       // session start (Rate base)
-	actions   []time.Time     // timestamps of this session's persisted mutations
+	states      []State               // per corpus index; states[i].Status == "" means Unreviewed
+	byID        map[string]int        // record ID -> corpus index
+	diagnostics [][]checks.Diagnostic // corpus-wide diagnostics at load or the last reconfigure, per corpus index
+	view        []int                 // filtered snapshot of corpus indices (never rebuilt implicitly)
+	pos         int                   // position in view; meaningless when view is empty
+	filter      Filter                // filter that built view
+	counts      Counts                // incremental counters (never scanned per render)
+	started     time.Time             // session start (Rate base)
+	actions     []time.Time           // timestamps of this session's persisted mutations
 }
 
 var errNoCurrent = errors.New("review: no current record")
@@ -216,14 +216,14 @@ func newSession(c *corpus.Corpus, store *storage.Store, persisted map[string]sto
 }
 
 // analyze runs checks.Analyze over the final text of every record with the current check
-// options and makes the result the corpus-wide baseline (Analysis and loadFlags).
+// options and makes the result the corpus-wide baseline (Analysis and diagnostics).
 func (s *Session) analyze() {
 	texts := make([]string, len(s.Corpus.Records))
 	for i := range texts {
 		texts[i] = s.FinalText(i)
 	}
 	s.Analysis = checks.Analyze(texts, s.Config.Checks)
-	s.loadFlags = s.Analysis.Flags
+	s.diagnostics = s.Analysis.Diagnostics
 }
 
 // Reconfigure applies reloaded settings to the open session. The flag taxonomy is replaced
@@ -279,39 +279,40 @@ func (s *Session) FinalText(i int) string {
 	return s.Corpus.Records[i].Text
 }
 
-// AutoFlags returns the auto flags of record i: the corpus-wide analysis from load or the last
-// reconfigure, or — for an edited record — freshly computed per-record flags merged with the
-// corpus-wide flags (duplicate, possible_template) the record had at that baseline.
-func (s *Session) AutoFlags(i int) []checks.Flag {
+// Diagnostics returns the diagnostics of record i: the corpus-wide analysis from load or the
+// last reconfigure, or — for an edited record — freshly computed per-record diagnostics merged
+// with the corpus-wide ones (duplicate, possible_template) the record had at that baseline.
+func (s *Session) Diagnostics(i int) []checks.Diagnostic {
 	if i < 0 || i >= len(s.states) {
 		return nil
 	}
-	loaded := s.loadedFlags(i)
+	loaded := s.loadDiagnostics(i)
 	if !s.states[i].Edited() {
 		return loaded
 	}
 	merged := checks.Single(s.FinalText(i), s.Config.Checks)
-	for _, f := range loaded {
-		if f.Name == checks.Duplicate || f.Name == checks.PossibleTemplate {
-			if !hasFlagName(merged, f.Name) {
-				merged = append(merged, f)
+	for _, d := range loaded {
+		if d.Name == checks.Duplicate || d.Name == checks.PossibleTemplate {
+			if !hasDiagnostic(merged, d.Name) {
+				merged = append(merged, d)
 			}
 		}
 	}
 	return merged
 }
 
-// loadedFlags copies the baseline analysis flags (from load or the last reconfigure) of record i.
-func (s *Session) loadedFlags(i int) []checks.Flag {
-	if i < 0 || i >= len(s.loadFlags) {
+// loadDiagnostics copies the baseline diagnostics (from load or the last reconfigure) of record i.
+func (s *Session) loadDiagnostics(i int) []checks.Diagnostic {
+	if i < 0 || i >= len(s.diagnostics) {
 		return nil
 	}
-	return append([]checks.Flag(nil), s.loadFlags[i]...)
+	return append([]checks.Diagnostic(nil), s.diagnostics[i]...)
 }
 
-func hasFlagName(flags []checks.Flag, name string) bool {
-	for _, f := range flags {
-		if f.Name == name {
+// hasDiagnostic reports whether diags contains a diagnostic called name.
+func hasDiagnostic(diags []checks.Diagnostic, name string) bool {
+	for _, d := range diags {
+		if d.Name == name {
 			return true
 		}
 	}
@@ -467,7 +468,7 @@ func (s *Session) SetStatus(st ReviewStatus) (bool, error) {
 	return s.NextUnresolved(), nil
 }
 
-// SaveEdit persists edited text for current record (text equal to original => clears edit). Recomputes its Single() flags.
+// SaveEdit persists edited text for current record (text equal to original => clears edit). Its diagnostics are recomputed by Diagnostics.
 func (s *Session) SaveEdit(text string) error {
 	i := s.Current()
 	if i < 0 {
@@ -650,12 +651,13 @@ func (s *Session) Batches() []Facet {
 	return sortedFacets(counts)
 }
 
-// AutoFlagFacets returns corpus-wide auto flag counts, sorted by flag name.
-func (s *Session) AutoFlagFacets() []Facet {
+// DiagnosticFacets returns corpus-wide diagnostic counts, sorted by name. Only diagnostics
+// present on at least one record are listed.
+func (s *Session) DiagnosticFacets() []Facet {
 	counts := make(map[string]int)
 	for i := range s.Corpus.Records {
-		for _, f := range s.AutoFlags(i) {
-			counts[f.Name]++
+		for _, d := range s.Diagnostics(i) {
+			counts[d.Name]++
 		}
 	}
 	return sortedFacets(counts)
@@ -710,8 +712,8 @@ func (s *Session) matches(i int, f Filter) bool {
 		return err == nil && st.EffectiveStatus() == want
 	case FilterEdited:
 		return st.Edited()
-	case FilterAuto:
-		return flagMatches(f.Value, autoFlagNames(s.AutoFlags(i)))
+	case FilterDiagnostic:
+		return flagMatches(f.Value, diagnosticNames(s.Diagnostics(i)))
 	case FilterManual:
 		return flagMatches(f.Value, st.ManualFlags)
 	case FilterSuggested:
@@ -738,13 +740,14 @@ func flagMatches(want string, names []string) bool {
 	return false
 }
 
-func autoFlagNames(flags []checks.Flag) []string {
-	if len(flags) == 0 {
+// diagnosticNames returns the names of diags, nil when there are none.
+func diagnosticNames(diags []checks.Diagnostic) []string {
+	if len(diags) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(flags))
-	for _, f := range flags {
-		names = append(names, f.Name)
+	names := make([]string, 0, len(diags))
+	for _, d := range diags {
+		names = append(names, d.Name)
 	}
 	return names
 }

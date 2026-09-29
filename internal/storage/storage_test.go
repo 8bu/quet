@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -58,8 +60,8 @@ func TestMetaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta(schema_version): %v", err)
 	}
-	if !ok || version != "1" {
-		t.Fatalf("schema_version = (%q, %v), want (\"1\", true)", version, ok)
+	if want := strconv.Itoa(schemaVersion); !ok || version != want {
+		t.Fatalf("schema_version = (%q, %v), want (%q, true)", version, ok, want)
 	}
 	if _, ok, err := s.GetMeta("missing"); err != nil || ok {
 		t.Fatalf("GetMeta(missing) = (_, %v, %v), want (_, false, nil)", ok, err)
@@ -252,5 +254,122 @@ func TestUndoRestoresLatestAndSurvivesReopen(t *testing.T) {
 	}
 	if got := final["note-002"]; got.EditedText != nil {
 		t.Errorf("note-002 after undo = %+v, want no edit", got)
+	}
+}
+
+// v1Schema is the version 1 sidecar DDL, whose records table still carried auto_flags.
+var v1Schema = []string{
+	`CREATE TABLE meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL)`,
+	`CREATE TABLE records (
+		id           TEXT PRIMARY KEY,
+		status       TEXT NOT NULL,
+		edited_text  TEXT,
+		original_text TEXT,
+		manual_flags TEXT NOT NULL DEFAULT '[]',
+		auto_flags   TEXT NOT NULL DEFAULT '[]',
+		annotations  TEXT,
+		updated_at   TEXT NOT NULL)`,
+	`CREATE TABLE events (
+		seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+		at           TEXT NOT NULL,
+		record_id    TEXT NOT NULL,
+		kind         TEXT NOT NULL,
+		before_state TEXT NOT NULL,
+		after_state  TEXT NOT NULL,
+		undone       INTEGER NOT NULL DEFAULT 0)`,
+	`INSERT INTO meta (key, value) VALUES ('schema_version', '1')`,
+	`INSERT INTO records (id, status, edited_text, original_text, manual_flags, auto_flags, annotations, updated_at) VALUES
+		('note-001', 'approved', NULL, 'one', '[]', '["duplicate"]', NULL, '2026-01-01T00:00:00Z'),
+		('note-002', 'needs_review', 'two fixed', 'two', '["slang","typo"]', '[]', '{"k":1}', '2026-01-01T00:00:01Z')`,
+	`INSERT INTO events (at, record_id, kind, before_state, after_state) VALUES
+		('2026-01-01T00:00:00Z', 'note-001', 'status',
+			'{"status":"unreviewed","edited_text":null,"manual_flags":[],"annotations":null}',
+			'{"status":"approved","edited_text":null,"manual_flags":[],"annotations":null}'),
+		('2026-01-01T00:00:01Z', 'note-002', 'flags',
+			'{"status":"needs_review","edited_text":"two fixed","manual_flags":["slang"],"annotations":{"k":1}}',
+			'{"status":"needs_review","edited_text":"two fixed","manual_flags":["slang","typo"],"annotations":{"k":1}}')`,
+}
+
+func TestOpenMigratesV1Sidecar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corpus.jsonl.quet.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	for _, stmt := range v1Schema {
+		if _, err := raw.Exec(stmt); err != nil {
+			raw.Close()
+			t.Fatalf("build v1 sidecar: %v\n%s", err, stmt)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open v1 sidecar: %v", err)
+	}
+	defer s.Close()
+
+	if version, ok, err := s.GetMeta("schema_version"); err != nil || !ok || version != strconv.Itoa(schemaVersion) {
+		t.Fatalf("schema_version = (%q, %v, %v), want %d", version, ok, err, schemaVersion)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('records') WHERE name = 'auto_flags'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("auto_flags columns after migration = (%d, %v), want 0", n, err)
+	}
+	var original string
+	if err := s.db.QueryRow(`SELECT original_text FROM records WHERE id = 'note-002'`).Scan(&original); err != nil || original != "two" {
+		t.Fatalf("original_text = (%q, %v), want two", original, err)
+	}
+
+	all, err := s.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if got := all["note-001"]; got.Status != "approved" || got.EditedText != nil || got.ManualFlags != nil {
+		t.Errorf("note-001 = %+v, want approved, unedited, no flags", got)
+	}
+	got := all["note-002"]
+	if got.Status != "needs_review" || got.EditedText == nil || *got.EditedText != "two fixed" ||
+		strings.Join(got.ManualFlags, ",") != "slang,typo" || string(got.Annotations) != `{"k":1}` {
+		t.Errorf("note-002 = %+v, want needs_review, edit kept, flags slang,typo, annotations kept", got)
+	}
+	if n, err := s.CountEvents(); err != nil || n != 2 {
+		t.Fatalf("CountEvents = (%d, %v), want (2, nil)", n, err)
+	}
+
+	// Writing and undo work on the migrated table.
+	if err := s.Apply("note-003", "three", "status", RecordState{Status: "unreviewed"}, RecordState{Status: "rejected"}); err != nil {
+		t.Fatalf("Apply on migrated sidecar: %v", err)
+	}
+	if id, restored, ok, err := s.Undo(); err != nil || !ok || id != "note-003" || restored.Status != "unreviewed" {
+		t.Fatalf("Undo new write = (%q, %+v, %v, %v)", id, restored, ok, err)
+	}
+	if id, restored, ok, err := s.Undo(); err != nil || !ok || id != "note-002" || strings.Join(restored.ManualFlags, ",") != "slang" {
+		t.Fatalf("Undo migrated event = (%q, %+v, %v, %v), want note-002 back to slang", id, restored, ok, err)
+	}
+	all, err = s.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll after undo: %v", err)
+	}
+	if got := all["note-002"]; strings.Join(got.ManualFlags, ",") != "slang" || got.EditedText == nil || *got.EditedText != "two fixed" {
+		t.Errorf("note-002 after undo = %+v, want edit kept with flag slang", got)
+	}
+	if got := all["note-003"]; got.Status != "unreviewed" {
+		t.Errorf("note-003 after undo = %+v, want unreviewed", got)
+	}
+
+	// Reopening an already migrated sidecar is a no-op.
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen migrated sidecar: %v", err)
+	}
+	defer again.Close()
+	if all, err := again.LoadAll(); err != nil || len(all) != 3 {
+		t.Fatalf("LoadAll after reopen = (%d records, %v), want 3", len(all), err)
 	}
 }

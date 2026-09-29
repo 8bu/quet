@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -40,7 +41,10 @@ type Store struct {
 // SidecarPath returns corpusPath + ".quet.db".
 func SidecarPath(corpusPath string) string { return corpusPath + ".quet.db" }
 
-const schemaVersion = "1"
+// schemaVersion is the current sidecar schema. History:
+//   - 1: initial schema (records carried an auto_flags column).
+//   - 2: records.auto_flags dropped; check results are computed locally, never persisted.
+const schemaVersion = 2
 
 const (
 	createMetaTable = `CREATE TABLE IF NOT EXISTS meta (
@@ -53,7 +57,6 @@ const (
 		edited_text  TEXT,
 		original_text TEXT,
 		manual_flags TEXT NOT NULL DEFAULT '[]',
-		auto_flags   TEXT NOT NULL DEFAULT '[]',
 		annotations  TEXT,
 		updated_at   TEXT NOT NULL)`
 
@@ -67,8 +70,8 @@ const (
 		undone       INTEGER NOT NULL DEFAULT 0)`
 
 	upsertRecord = `INSERT INTO records
-		(id, status, edited_text, original_text, manual_flags, auto_flags, annotations, updated_at)
-		VALUES (?, ?, ?, ?, ?, '[]', ?, ?)
+		(id, status, edited_text, original_text, manual_flags, annotations, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status       = excluded.status,
 			edited_text  = excluded.edited_text,
@@ -77,11 +80,10 @@ const (
 			annotations  = excluded.annotations,
 			updated_at   = excluded.updated_at`
 
-	// restoreRecord leaves original_text and auto_flags untouched: the before-state blob
-	// does not carry them.
+	// restoreRecord leaves original_text untouched: the before-state blob does not carry it.
 	restoreRecord = `INSERT INTO records
-		(id, status, edited_text, manual_flags, auto_flags, annotations, updated_at)
-		VALUES (?, ?, ?, ?, '[]', ?, ?)
+		(id, status, edited_text, manual_flags, annotations, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status       = excluded.status,
 			edited_text  = excluded.edited_text,
@@ -122,17 +124,75 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
+// migrate creates missing tables, then upgrades an older sidecar step by step to
+// schemaVersion, all in one transaction. Review state (statuses, edits, manual flags,
+// annotations, events) is preserved by every step.
 func (s *Store) migrate() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("storage: migrate: begin: %w", err)
+	}
+	defer tx.Rollback()
+
 	for _, stmt := range []string{createMetaTable, createRecordsTable, createEventsTable} {
-		if _, err := s.db.Exec(stmt); err != nil {
+		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("storage: migrate: %w", err)
 		}
 	}
-	if _, err := s.db.Exec(
-		`INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO NOTHING`,
-		schemaVersion,
-	); err != nil {
-		return fmt.Errorf("storage: set schema_version: %w", err)
+	version, err := storedSchemaVersion(tx)
+	if err != nil {
+		return err
+	}
+	if version < 2 {
+		if err := dropRecordsColumn(tx, "auto_flags"); err != nil {
+			return err
+		}
+	}
+	if version < schemaVersion {
+		if _, err := tx.Exec(
+			`INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+				ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			strconv.Itoa(schemaVersion),
+		); err != nil {
+			return fmt.Errorf("storage: set schema_version: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storage: migrate: commit: %w", err)
+	}
+	return nil
+}
+
+// storedSchemaVersion reads meta.schema_version; 0 when absent (a database just created).
+func storedSchemaVersion(tx *sql.Tx) (int, error) {
+	var raw string
+	err := tx.QueryRow(`SELECT value FROM meta WHERE key = 'schema_version'`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("storage: read schema_version: %w", err)
+	}
+	version, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("storage: invalid schema_version %q: %w", raw, err)
+	}
+	return version, nil
+}
+
+// dropRecordsColumn drops column from the records table when it exists (no-op otherwise).
+func dropRecordsColumn(tx *sql.Tx, column string) error {
+	var n int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('records') WHERE name = ?`, column,
+	).Scan(&n); err != nil {
+		return fmt.Errorf("storage: inspect records.%s: %w", column, err)
+	}
+	if n == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE records DROP COLUMN ` + column); err != nil {
+		return fmt.Errorf("storage: drop records.%s: %w", column, err)
 	}
 	return nil
 }

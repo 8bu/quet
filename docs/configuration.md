@@ -15,11 +15,19 @@ checks:
   weird_symbol_ratio: 0.35
   template_min_occurrences: 8
 
+update:
+  check: false
+
 flags_file: "./flags.yaml"
 ```
 
 `review.skip_reviewed` controls [auto-advance](reviewing.md#statuses); the `checks` keys are the
-thresholds of the [auto checks](checks.md).
+thresholds of the [diagnostics](diagnostics.md).
+
+`update.check` is opt-in. When `true`, Quet checks for a newer release on every run: the TUI shows
+`quet <version> available — run: quet update`, and `stats`, `export` and `init` print the same
+notice on stderr. The check never blocks for more than a moment and is silently skipped on network
+errors. With it off (the default) Quet makes no network requests. See [Usage](usage.md#update).
 
 ## Creating config files
 

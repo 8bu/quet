@@ -17,19 +17,19 @@ func TestDefaultOptions(t *testing.T) {
 
 func TestOptionsZeroFieldsUseDefaults(t *testing.T) {
 	long := strings.Repeat("a", 200)
-	flags := Single(long, Options{})
-	detail, ok := flagDetail(flags, TooLong)
+	diags := Single(long, Options{})
+	detail, ok := diagDetail(diags, TooLong)
 	if !ok {
-		t.Fatalf("Single(%q, Options{}) = %v, want a too_long flag", long, flags)
+		t.Fatalf("Single(%q, Options{}) = %v, want a too_long diagnostic", long, diags)
 	}
 	if want := "200 chars, limit 160"; detail != want {
 		t.Errorf("too_long detail = %q, want %q", detail, want)
 	}
-	if _, ok := flagDetail(Single(long, Options{MaxChars: 1000}), TooLong); ok {
-		t.Errorf("Single with MaxChars 1000 still flagged too_long: %v", Single(long, Options{MaxChars: 1000}))
+	if _, ok := diagDetail(Single(long, Options{MaxChars: 1000}), TooLong); ok {
+		t.Errorf("Single with MaxChars 1000 still reported too_long: %v", Single(long, Options{MaxChars: 1000}))
 	}
-	if _, ok := flagDetail(Single("ck Nam 2tr", Options{}), RepeatedChars); ok {
-		t.Errorf("Single with zero threshold flagged repeated_chars: %v", Single("ck Nam 2tr", Options{}))
+	if _, ok := diagDetail(Single("ck Nam 2tr", Options{}), RepeatedChars); ok {
+		t.Errorf("Single with zero threshold reported repeated_chars: %v", Single("ck Nam 2tr", Options{}))
 	}
 }
 
@@ -54,7 +54,7 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
-func TestHasAmount(t *testing.T) {
+func TestAmountSpans(t *testing.T) {
 	amounts := []string{
 		"50k", "2tr", "1tr2", "12tr5", "2 triệu", "2 củ", "5 lít", "1.5tr", "1.2m",
 		"500000", "500.000", "500,000", "$20", "20usd", "200k vnd", "+20tr", "-500k",
@@ -63,8 +63,8 @@ func TestHasAmount(t *testing.T) {
 		"5 l", "2 TRIỆU", "trả 1tr2 tiền điện",
 	}
 	for _, s := range amounts {
-		if !HasAmount(s) {
-			t.Errorf("HasAmount(%q) = false, want true", s)
+		if len(amountSpans(collapse(s))) == 0 {
+			t.Errorf("amountSpans(%q) found no amount, want one", s)
 		}
 	}
 	nonAmounts := []string{
@@ -72,8 +72,8 @@ func TestHasAmount(t *testing.T) {
 		"không có gì", "cho tôi xin lại", "chương trình khuyến mãi",
 	}
 	for _, s := range nonAmounts {
-		if HasAmount(s) {
-			t.Errorf("HasAmount(%q) = true, want false", s)
+		if spans := amountSpans(collapse(s)); len(spans) != 0 {
+			t.Errorf("amountSpans(%q) = %v, want no amount", s, spans)
 		}
 	}
 }
@@ -187,8 +187,8 @@ func TestAnalyze(t *testing.T) {
 	}
 
 	a := Analyze(texts, Options{})
-	if len(a.Flags) != len(texts) || len(a.DupGroup) != len(texts) || len(a.Pattern) != len(texts) {
-		t.Fatalf("per-record slices = %d/%d/%d, want %d", len(a.Flags), len(a.DupGroup), len(a.Pattern), len(texts))
+	if len(a.Diagnostics) != len(texts) || len(a.DupGroup) != len(texts) || len(a.Pattern) != len(texts) {
+		t.Fatalf("per-record slices = %d/%d/%d, want %d", len(a.Diagnostics), len(a.DupGroup), len(a.Pattern), len(texts))
 	}
 
 	if len(a.Groups) != 1 || len(a.Groups[0]) != 3 {
@@ -210,17 +210,17 @@ func TestAnalyze(t *testing.T) {
 		}
 	}
 
-	// Record 8: duplicate + too long + no amount, in AllFlags order.
-	got := flagNames(a.Flags[8])
-	want := []string{Duplicate, TooLong, MissingAmount}
+	// Record 8: duplicate + too long, in All order; no amount is not a diagnostic.
+	got := diagNames(a.Diagnostics[8])
+	want := []string{Duplicate, TooLong}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("Flags[8] = %v, want %v", got, want)
+		t.Errorf("Diagnostics[8] = %v, want %v", got, want)
 	}
-	if detail, _ := flagDetail(a.Flags[8], Duplicate); detail != "3 records share this text" {
+	if detail, _ := diagDetail(a.Diagnostics[8], Duplicate); detail != "3 records share this text" {
 		t.Errorf("duplicate detail = %q, want %q", detail, "3 records share this text")
 	}
 	n := utf8.RuneCountInString(Normalize(longNote))
-	if detail, _ := flagDetail(a.Flags[8], TooLong); detail != strconv.Itoa(n)+" chars, limit 160" {
+	if detail, _ := diagDetail(a.Diagnostics[8], TooLong); detail != strconv.Itoa(n)+" chars, limit 160" {
 		t.Errorf("too_long detail = %q, want %d chars, limit 160", detail, n)
 	}
 	if a.Pattern[8] != "" {
@@ -228,8 +228,8 @@ func TestAnalyze(t *testing.T) {
 	}
 
 	// Record 11: empty text only.
-	if len(a.Flags[11]) != 1 || a.Flags[11][0] != (Flag{Name: Empty, Detail: "text is empty"}) {
-		t.Errorf("Flags[11] = %v, want a single empty flag", a.Flags[11])
+	if len(a.Diagnostics[11]) != 1 || a.Diagnostics[11][0] != (Diagnostic{Name: Empty, Detail: "text is empty"}) {
+		t.Errorf("Diagnostics[11] = %v, want a single empty diagnostic", a.Diagnostics[11])
 	}
 
 	// Template family: 8 identical patterns reach the default threshold.
@@ -243,10 +243,10 @@ func TestAnalyze(t *testing.T) {
 		if a.Pattern[i] != pattern {
 			t.Errorf("Pattern[%d] = %q, want %q", i, a.Pattern[i], pattern)
 		}
-		if got := flagNames(a.Flags[i]); strings.Join(got, ",") != PossibleTemplate {
-			t.Errorf("Flags[%d] = %v, want only %s", i, got, PossibleTemplate)
+		if got := diagNames(a.Diagnostics[i]); strings.Join(got, ",") != PossibleTemplate {
+			t.Errorf("Diagnostics[%d] = %v, want only %s", i, got, PossibleTemplate)
 		}
-		if detail, _ := flagDetail(a.Flags[i], PossibleTemplate); detail != wantDetail {
+		if detail, _ := diagDetail(a.Diagnostics[i], PossibleTemplate); detail != wantDetail {
 			t.Errorf("possible_template detail = %q, want %q", detail, wantDetail)
 		}
 	}
@@ -259,13 +259,13 @@ func TestAnalyzeTemplateThresholdUsesOption(t *testing.T) {
 		t.Fatalf("Templates = %v, want 3 occurrences", a.Templates)
 	}
 	for i := range texts {
-		if _, ok := flagDetail(a.Flags[i], PossibleTemplate); !ok {
-			t.Errorf("Flags[%d] = %v, want possible_template", i, a.Flags[i])
+		if _, ok := diagDetail(a.Diagnostics[i], PossibleTemplate); !ok {
+			t.Errorf("Diagnostics[%d] = %v, want possible_template", i, a.Diagnostics[i])
 		}
 	}
 }
 
-func TestSingleFlags(t *testing.T) {
+func TestSingleDiagnostics(t *testing.T) {
 	tests := []struct {
 		name, text string
 		opt        Options
@@ -274,11 +274,11 @@ func TestSingleFlags(t *testing.T) {
 		{"clean", "cho Nam vay 2tr", Options{}, nil},
 		{"empty", "", Options{}, []string{Empty}},
 		{"blank text is empty", "   \t ", Options{}, []string{Empty}},
-		{"too long", strings.Repeat("cho vay ", 24), Options{}, []string{TooLong, MissingAmount}},
+		{"too long", strings.Repeat("cho vay ", 24), Options{}, []string{TooLong}},
 		{"repeated chars", "ckkkkkkkkk Nam 2tr", Options{}, []string{RepeatedChars}},
 		{"weird symbols", "💰💸🙏 thanks bro 500000", Options{}, []string{WeirdSymbols}},
 		{"digits do not repeat", "500000", Options{}, nil},
-		{"missing amount", "cho tôi xin lại tiền", Options{}, []string{MissingAmount}},
+		{"no amount is valid content", "cho tôi xin lại tiền", Options{}, nil},
 		{
 			"short max chars",
 			"cho Nam vay 2tr và nữa",
@@ -287,31 +287,33 @@ func TestSingleFlags(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		got := flagNames(Single(tt.text, tt.opt))
+		got := diagNames(Single(tt.text, tt.opt))
 		if strings.Join(got, ",") != strings.Join(tt.want, ",") {
 			t.Errorf("%s: Single(%q, %+v) = %v, want %v", tt.name, tt.text, tt.opt, got, tt.want)
 		}
 	}
-	if detail, ok := flagDetail(Single("ckkkkkkkkk Nam 2tr", Options{}), RepeatedChars); !ok || !strings.Contains(detail, "9 times") {
+	if detail, ok := diagDetail(Single("ckkkkkkkkk Nam 2tr", Options{}), RepeatedChars); !ok || !strings.Contains(detail, "9 times") {
 		t.Errorf("repeated_chars detail = %q, want the offending run length", detail)
 	}
-	if detail, ok := flagDetail(Single("💰💸🙏 thanks bro 500000", Options{}), WeirdSymbols); !ok || detail != "ratio 0.40" {
+	if detail, ok := diagDetail(Single("💰💸🙏 thanks bro 500000", Options{}), WeirdSymbols); !ok || detail != "ratio 0.40" {
 		t.Errorf("weird_symbols detail = %q, want %q", detail, "ratio 0.40")
 	}
 }
 
-func flagNames(flags []Flag) []string {
-	names := make([]string, 0, len(flags))
-	for _, f := range flags {
-		names = append(names, f.Name)
+// diagNames returns the diagnostic names in order.
+func diagNames(diags []Diagnostic) []string {
+	names := make([]string, 0, len(diags))
+	for _, d := range diags {
+		names = append(names, d.Name)
 	}
 	return names
 }
 
-func flagDetail(flags []Flag, name string) (string, bool) {
-	for _, f := range flags {
-		if f.Name == name {
-			return f.Detail, true
+// diagDetail returns the detail of the diagnostic called name, if present.
+func diagDetail(diags []Diagnostic, name string) (string, bool) {
+	for _, d := range diags {
+		if d.Name == name {
+			return d.Detail, true
 		}
 	}
 	return "", false

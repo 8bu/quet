@@ -390,6 +390,83 @@ func TestDuplicatesOverlayListsMatches(t *testing.T) {
 	}
 }
 
+// diagnosticsModel returns a sized model over a small corpus whose only
+// diagnostic is one duplicate pair (records 0 and 1); record 2 is clean.
+func diagnosticsModel(t *testing.T) model {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "diag.jsonl")
+	lines := `{"id": "a", "text": "cho Nam vay 2tr"}
+{"id": "b", "text": "cho  nam vay 2tr"}
+{"id": "c", "text": "mượn bà Hoa 500k đóng học phí"}
+`
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatalf("write corpus: %v", err)
+	}
+	next, _ := newModel(openSession(t, path), Options{}).update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return next
+}
+
+func TestDetailsShowDiagnosticsOnlyWhenPresent(t *testing.T) {
+	m := diagnosticsModel(t)
+	tests := []struct {
+		name   string
+		record int
+		want   string
+	}{
+		{"duplicate record", 0, "diagnostics: duplicate"},
+		{"clean record", 2, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m.sess.Goto(tc.record)
+			rows, _ := m.detailsContent(60, 20)
+			joined := strings.Join(rows, "\n")
+			if strings.Contains(joined, "auto:") {
+				t.Errorf("details still show an auto row:\n%s", joined)
+			}
+			if tc.want == "" {
+				if strings.Contains(joined, "diagnostics:") {
+					t.Errorf("clean record shows diagnostics:\n%s", joined)
+				}
+				return
+			}
+			if !strings.Contains(joined, tc.want) {
+				t.Errorf("details lack %q:\n%s", tc.want, joined)
+			}
+		})
+	}
+}
+
+func TestDiagnosticFacetsListOnlyPresentAndFilter(t *testing.T) {
+	m := diagnosticsModel(t)
+	dup := -1
+	for i, r := range m.facets.rows {
+		switch {
+		case strings.HasPrefix(r.label, "auto:"):
+			t.Errorf("facet row %q uses the removed auto prefix", r.label)
+		case r.label == "diagnostic:duplicate":
+			dup = i
+			if r.count != 2 {
+				t.Errorf("diagnostic:duplicate count = %d, want 2", r.count)
+			}
+		case strings.HasPrefix(r.label, "diagnostic:"):
+			t.Errorf("facet row %q (count %d) for a diagnostic absent from the corpus", r.label, r.count)
+		}
+	}
+	if dup < 0 {
+		t.Fatal("no diagnostic:duplicate facet row")
+	}
+
+	m.facets.cursor = dup
+	next, _ := m.applyFacet()
+	if got := next.sess.Filter().String(); got != "diagnostic:duplicate" {
+		t.Errorf("active filter = %q, want diagnostic:duplicate", got)
+	}
+	if got := next.sess.View(); len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Errorf("filtered view = %v, want [0 1]", got)
+	}
+}
+
 func TestBurstAndPasteAreNotCommands(t *testing.T) {
 	m := testModel(t)
 	cur := m.sess.Current()
@@ -567,5 +644,117 @@ func TestConfigEditingUnavailableWithoutSettings(t *testing.T) {
 	next = runPaletteCommand(t, m, "Reload config")
 	if next.status != "Config editing unavailable" {
 		t.Errorf("reload status = %q, want the unavailable notice", next.status)
+	}
+}
+
+// updateModel returns a sized review model whose update check reports latest
+// with ok.
+func updateModel(t *testing.T, latest string, ok bool) model {
+	t.Helper()
+	check := func() (string, bool) { return latest, ok }
+	m := newModel(openSession(t, copyCorpus(t)), Options{UpdateCheck: check})
+	next, _ := m.update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return next
+}
+
+// runInit executes the model's Init command synchronously and feeds its
+// message back, the way the program would.
+func runInit(t *testing.T, m model) model {
+	t.Helper()
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init returned no command with an update check configured")
+	}
+	next, _ := m.update(cmd())
+	return next
+}
+
+func TestUpdateNoticeSurvivesStatusExpiry(t *testing.T) {
+	notice := updateNotice("9.9.9")
+	m := runInit(t, updateModel(t, "9.9.9", true))
+	if !strings.Contains(m.View(), notice) {
+		t.Fatalf("view lacks %q after the update check", notice)
+	}
+
+	m, _ = m.setStatus("Saved")
+	m, _ = m.update(statusExpireMsg{seq: m.statusSeq})
+	if !strings.Contains(m.View(), notice) {
+		t.Errorf("view lacks %q after the status expired", notice)
+	}
+
+	for _, size := range []struct{ w, h int }{{20, 5}, {40, 10}} {
+		small, _ := m.update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
+		lines := strings.Split(small.View(), "\n")
+		if len(lines) > size.h {
+			t.Errorf("%dx%d: %d lines, want <= %d", size.w, size.h, len(lines), size.h)
+		}
+		for i, line := range lines {
+			if w := lipgloss.Width(line); w > size.w {
+				t.Errorf("%dx%d: line %d width %d, want <= %d", size.w, size.h, i, w, size.w)
+			}
+		}
+	}
+}
+
+func TestNoUpdateNoticeWithoutNewerRelease(t *testing.T) {
+	m := updateModel(t, "9.9.9", false)
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init returned no command with an update check configured")
+	}
+	if msg := cmd(); msg != nil {
+		t.Fatalf("update check without an update sent %#v", msg)
+	}
+	if strings.Contains(m.View(), "available") {
+		t.Error("view shows an update notice although no update is available")
+	}
+}
+
+func TestNoUpdateCheckWhenDisabled(t *testing.T) {
+	if cmd := testModel(t).Init(); cmd != nil {
+		t.Error("review model Init returned a command without an update check")
+	}
+	b, err := newBrowser(t.TempDir(), nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd := b.Init(); cmd != nil {
+		t.Error("browser Init returned a command without an update check")
+	}
+}
+
+func TestBrowserHandsUpdateNoticeToReview(t *testing.T) {
+	path := copyCorpus(t)
+	calls := 0
+	check := func() (string, bool) { calls++; return "9.9.9", true }
+	b, err := newBrowser(filepath.Dir(path), func(p string) (*review.Session, error) {
+		return review.Open(p, testConfig(), testFlagDefs())
+	}, Options{UpdateCheck: check})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sized, _ := b.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	got, _ := sized.Update(b.Init()())
+	b = got.(browser)
+	notice := updateNotice("9.9.9")
+	if !strings.Contains(b.View(), notice) {
+		t.Fatalf("browser view lacks %q", notice)
+	}
+	for i, e := range b.entries {
+		if e.name == filepath.Base(path) {
+			b.cursor = i
+		}
+	}
+	rm, ok := press(t, b, specialKey(tea.KeyEnter)).(model)
+	if !ok {
+		t.Fatal("opening did not hand off to the review model")
+	}
+	t.Cleanup(func() { rm.sess.Close() })
+	rm, _ = rm.update(statusExpireMsg{seq: rm.statusSeq})
+	if !strings.Contains(rm.View(), notice) {
+		t.Errorf("review view lacks %q after the handoff", notice)
+	}
+	if calls != 1 {
+		t.Errorf("update check ran %d times, want once per program", calls)
 	}
 }

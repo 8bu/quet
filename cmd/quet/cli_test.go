@@ -58,6 +58,11 @@ func TestParseArgs(t *testing.T) {
 			want: command{kind: "review", status: "approved", filter: "unreviewed", hasFilter: true},
 		},
 		{
+			name: "diagnostic filter",
+			args: []string{"corpus.jsonl", "--filter", "diagnostic:duplicate"},
+			want: command{kind: "review", corpus: "corpus.jsonl", status: "approved", filter: "diagnostic:duplicate", hasFilter: true},
+		},
+		{
 			name: "help flag",
 			args: []string{"-h"},
 			want: command{kind: "review", status: "approved", help: true},
@@ -86,6 +91,16 @@ func TestParseArgs(t *testing.T) {
 			name: "init global force",
 			args: []string{"init", "--global", "--force"},
 			want: command{kind: "init", status: "approved", global: true, force: true},
+		},
+		{
+			name: "update subcommand",
+			args: []string{"update"},
+			want: command{kind: "update", status: "approved"},
+		},
+		{
+			name: "update check",
+			args: []string{"update", "--check"},
+			want: command{kind: "update", status: "approved", check: true},
 		},
 	}
 
@@ -116,12 +131,19 @@ func TestParseArgsErrors(t *testing.T) {
 		{name: "unknown format", args: []string{"export", "corpus.jsonl", "-o", "x.jsonl", "--format", "csv"}, want: "unknown format"},
 		{name: "filter outside review", args: []string{"export", "corpus.jsonl", "--filter", "all"}, want: "--filter is only valid when reviewing"},
 		{name: "unknown filter", args: []string{"corpus.jsonl", "--filter", "bogus"}, want: "unknown filter"},
+		{name: "removed auto filter", args: []string{"corpus.jsonl", "--filter", "auto"}, want: "unknown filter"},
+		{name: "removed auto filter with name", args: []string{"corpus.jsonl", "--filter", "auto:duplicate"}, want: "unknown filter"},
 		{name: "status outside export", args: []string{"corpus.jsonl", "--status", "approved"}, want: "--status is only valid with `quet export`"},
 		{name: "bool flag with value", args: []string{"corpus.jsonl", "--force=yes"}, want: "does not take a value"},
 		{name: "init with argument", args: []string{"init", "extra"}, want: `unexpected argument "extra"`},
 		{name: "filter with init", args: []string{"init", "--filter", "x"}, want: "--filter is not valid with `quet init`"},
 		{name: "global outside init", args: []string{"corpus.jsonl", "--global"}, want: "--global is only valid with `quet init`"},
 		{name: "force when reviewing", args: []string{"corpus.jsonl", "--force"}, want: "--force is only valid with `quet export` or `quet init`"},
+		{name: "update with argument", args: []string{"update", "x"}, want: `unexpected argument "x"`},
+		{name: "check when reviewing", args: []string{"corpus.jsonl", "--check"}, want: "--check is only valid with `quet update`"},
+		{name: "check with init", args: []string{"init", "--check"}, want: "--check is only valid with `quet update`"},
+		{name: "filter with update", args: []string{"update", "--filter", "x"}, want: "--filter is not valid with `quet update`"},
+		{name: "force with update", args: []string{"update", "--force"}, want: "--force is not valid with `quet update`"},
 	}
 
 	for _, tt := range tests {

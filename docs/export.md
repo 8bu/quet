@@ -50,7 +50,8 @@ to overwrite an existing file unless you pass `-f`. Nothing ever writes into the
 With `--with-review` each JSONL line keeps its imported metadata and gains one `quet` key:
 
 ```json
-{"id": "note-001", "text": "bắn thg Nam 2 củ tiền hôm nọ", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-02T01:00:00Z", "suggested_flags": ["slang"], "lang": "vi", "quet": {"id": "id:note-001", "status": "approved", "edited": false, "manual_flags": [], "auto_flags": [], "suggested_flags": ["slang"]}}
+{"id": "note-001", "text": "bắn thg Nam 2 củ tiền hôm nọ", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-02T01:00:00Z", "suggested_flags": ["slang"], "lang": "vi", "quet": {"id": "id:note-001", "status": "approved", "edited": false, "manual_flags": [], "suggested_flags": ["slang"]}}
 ```
 
-`original_text` appears inside `quet` only for records you edited.
+`original_text` appears inside `quet` only for records you edited. [Diagnostics](diagnostics.md)
+are informational only and are never exported.

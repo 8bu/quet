@@ -5,6 +5,7 @@ quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]  # review in the TUI (def
 quet stats <corpus> [flags]                            # print review counts
 quet export <corpus> [flags]                           # write a reviewed corpus
 quet init [--global] [-f|--force]                      # write starter quet.yaml and flags.yaml
+quet update [--check]                                  # update to the latest release
 quet help                                              # help (also: quet --help, -h)
 ```
 
@@ -23,7 +24,7 @@ Unknown flags and missing arguments print the usage on stderr and exit with stat
 
 | Flag | Meaning |
 | --- | --- |
-| `--filter <name>` | Start with a filter: `all`, `unreviewed`, `approved`, `rejected`, `needs_review`, `edited`, `auto[:name]`, `manual[:name]`, `suggested[:name]`, `source:<x>`, `batch:<x>` |
+| `--filter <name>` | Start with a filter: `all`, `unreviewed`, `approved`, `rejected`, `needs_review`, `edited`, `diagnostic[:name]`, `manual[:name]`, `suggested[:name]`, `source:<x>`, `batch:<x>` |
 | `--no-skip-reviewed` | Stay on already reviewed records instead of skipping them |
 | `--flags-file <path>` | Use this manual flag definitions file instead of the default search |
 | `--config <path>` | Use this config file instead of `./quet.yaml` |
@@ -75,10 +76,30 @@ Rejected:          0
 Needs review:      0
 Unreviewed:       21
 Edited:            0
-Auto flags: duplicate 2, too_long 1, empty 1, repeated_chars 1, weird_symbols 1, missing_amount 1, possible_template 8
+Diagnostics: duplicate 2, too_long 1, empty 1, repeated_chars 1, weird_symbols 1, possible_template 8
 Corpus: examples/corpus.jsonl
 Sidecar: examples/corpus.jsonl.quet.db
 ```
 
-Counts come from your corpus and your review progress. The `Auto flags:` line lists only the
-[checks](checks.md) that fired at least once, and is omitted when none did.
+Counts come from your corpus and your review progress. The `Diagnostics:` line lists only the
+[diagnostics](diagnostics.md) that fired at least once, and is omitted when none did.
+
+## Update
+
+```sh
+quet update           # replace the running binary with the latest release
+quet update --check   # only report whether a newer version exists
+```
+
+`quet update` downloads the `quet_<os>_<arch>` asset of the latest
+[GitHub release](https://github.com/8bu/quet/releases), verifies it against the release's
+`SHA256SUMS`, and replaces the running binary in place. When `quet` is a symlink, the real file it
+points to is updated. Nothing is replaced if the checksum doesn't match. `--check` makes no changes
+and only reports whether a newer version exists.
+
+Like `install.sh`, it honours `QUET_RELEASES_URL` to download from a mirror instead of
+`https://github.com/8bu/quet/releases`. If the binary's directory isn't writable, re-run with
+sufficient permissions (for example `sudo quet update`) or use the install script.
+
+To be told about new releases automatically, set `update.check: true`; see
+[Configuration](configuration.md).

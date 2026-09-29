@@ -13,7 +13,7 @@ import (
 // Options selects which records and what shape to export.
 type Options struct {
 	Statuses   []review.ReviewStatus // empty = all statuses
-	WithReview bool                  // include a "quet" object: {id,status,edited,original_text,manual_flags,auto_flags,suggested_flags}
+	WithReview bool                  // include a "quet" object: {id,status,edited,original_text,manual_flags,suggested_flags}
 	Format     string                // "jsonl" (default) | "txt" (final text, one per line)
 }
 

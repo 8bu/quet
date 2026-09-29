@@ -59,12 +59,16 @@ find a key.
 
 ## Flags
 
-Flags come from three separate sources and are never merged blindly:
+A record's review data is its status, its manual flags and its suggested flags (plus any edit).
+The two kinds of flags are kept separate and never merged blindly:
 
-- **auto flags** — computed by Quet's deterministic [checks](checks.md). Warnings only.
+- **manual flags** — your own labels, defined in `flags.yaml`. They are not hard-coded, and you
+  toggle them with `f`.
 - **suggested flags** — taken from the imported metadata (`suggested_flags` in the source file) and
-  shown separately. No model is called, ever.
-- **manual flags** — your own labels, defined in `flags.yaml`. They are not hard-coded.
+  shown separately; they are reserved for external reviewers. No model is called, ever.
+
+[Diagnostics](diagnostics.md) such as `duplicate` or `too_long` are not flags: Quet computes them
+locally as hints, they are not part of the review data, and they are never exported.
 
 ```yaml
 manual:
@@ -102,6 +106,7 @@ config sets it, else `./flags.yaml`.
 
 The editor is `$VISUAL`, else `$EDITOR`, else `vi`; arguments are allowed (`EDITOR="code -w"`).
 When it exits, the settings are reloaded into the open session: new manual flags show up in the
-picker, check thresholds apply and auto flags are recomputed, and `skip_reviewed` changes only if
-its value in the file changed (so `--no-skip-reviewed` survives an unrelated edit). If the config
-has an error, the previous settings stay in effect and the error is shown in the status line.
+picker, diagnostic thresholds apply and diagnostics are recomputed, and `skip_reviewed` changes
+only if its value in the file changed (so `--no-skip-reviewed` survives an unrelated edit). If the
+config has an error, the previous settings stay in effect and the error is shown in the status
+line.
