@@ -159,14 +159,21 @@ type Session struct {
 
 var errNoCurrent = errors.New("review: no current record")
 
-// Open loads the corpus, opens/creates the sidecar DB (storage.SidecarPath), restores states (by record ID), runs checks.Analyze
-// on final texts, applies Filter{FilterAll} and positions on the first unresolved record (or 0).
+// Open loads the corpus, then opens it with OpenCorpus.
 func Open(corpusPath string, cfg config.Config, flags []config.FlagDef) (*Session, error) {
 	c, err := corpus.Load(corpusPath)
 	if err != nil {
 		return nil, err
 	}
-	store, err := storage.Open(storage.SidecarPath(corpusPath))
+	return OpenCorpus(c, cfg, flags)
+}
+
+// OpenCorpus opens/creates the sidecar DB for an already loaded corpus
+// (storage.SidecarPath of c.Path), restores states (by record ID), runs
+// checks.Analyze on final texts, applies Filter{FilterAll} and positions on
+// the first unresolved record (or 0).
+func OpenCorpus(c *corpus.Corpus, cfg config.Config, flags []config.FlagDef) (*Session, error) {
+	store, err := storage.Open(storage.SidecarPath(c.Path))
 	if err != nil {
 		return nil, err
 	}

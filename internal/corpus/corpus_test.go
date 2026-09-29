@@ -203,6 +203,43 @@ func TestLoadUnknownExtension(t *testing.T) {
 	}
 }
 
+func TestSupported(t *testing.T) {
+	for name, want := range map[string]bool{
+		"a.jsonl": true, "a.JSON": true, "notes.txt": true,
+		"a.csv": false, "a.jsonl.quet.db": false, "jsonl": false, "a.md": false,
+	} {
+		if got := Supported(name); got != want {
+			t.Errorf("Supported(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestUsable(t *testing.T) {
+	tests := []struct {
+		name, file, src string
+		want            string // "" = usable
+	}{
+		{"one record with text", "c.jsonl", "{\"text\":\"\"}\n{\"text\":\"CK Nam 2tr\"}\n", ""},
+		{"text in a secondary field", "c.jsonl", "{\"content\":\"CK Nam 2tr\"}\n", ""},
+		{"empty jsonl", "c.jsonl", "", "no records"},
+		{"empty json array", "c.json", "[]", "no records"},
+		{"objects without a text field", "c.jsonl", "{\"name\":\"quet\"}\n{\"version\":1}\n", "looked for a text, content"},
+		{"only blank texts", "c.json", `[{"text":"  "},{"text":""}]`, "no record has text"},
+		{"blank txt", "c.txt", "\n  \n", "no records"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := load(t, tt.file, tt.src).Usable()
+			switch {
+			case tt.want == "" && err != nil:
+				t.Fatalf("Usable() = %v, want nil", err)
+			case tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)):
+				t.Fatalf("Usable() = %v, want error containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestTextExtraction(t *testing.T) {
 	tests := []struct {
 		name      string

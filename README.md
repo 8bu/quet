@@ -16,7 +16,7 @@ file next to the corpus.
 
 ```sh
 go build -o quet ./cmd/quet
-./quet examples/corpus.jsonl
+./quet examples/corpus.jsonl    # or just ./quet to pick a file from a browser
 ```
 
 `w` to approve, `s` to reject, `space` for needs review. Progress is saved as you go, so `q` quits
@@ -44,10 +44,10 @@ There is no packaging step: `quet` is a single static binary with an embedded SQ
 ## Usage
 
 ```sh
-quet <corpus.jsonl|corpus.json|corpus.txt> [flags]   # review in the TUI (default)
-quet stats <corpus> [flags]                          # print review counts
-quet export <corpus> [flags]                         # write a reviewed corpus
-quet help                                            # help (also: quet --help, -h)
+quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]  # review in the TUI (default)
+quet stats <corpus> [flags]                            # print review counts
+quet export <corpus> [flags]                           # write a reviewed corpus
+quet help                                              # help (also: quet --help, -h)
 ```
 
 The corpus argument and flags may come in any order, and `--flag value` and `--flag=value` are
@@ -70,9 +70,29 @@ Quet — Quick Utility for Evaluating Text
 A fast, keyboard-first TUI for reviewing and curating text corpora.
 
 Usage:
-  quet <corpus.jsonl|corpus.json|corpus.txt> [flags]
+  quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]
 ...
 ```
+
+### Opening a file from the browser
+
+Run `quet` with no corpus (or with a directory) to start on a file browser. It lists folders and
+`.jsonl`, `.json` and `.txt` files only; files that already have review progress are marked
+`● in review`.
+
+| Key | Action |
+| --- | --- |
+| `w` / `s`, `↑` / `↓`, `k` / `j` | move |
+| `enter`, `d`, `→`, `l` | open folder or file |
+| `a`, `backspace`, `←`, `h` | go up a folder |
+| `g` / `G` | first / last entry |
+| `.` | show or hide hidden files |
+| `q`, `esc` | quit |
+
+Opening a file runs a gate first: the file must parse, contain at least one record, and at least one
+record must have text in one of the recognised text fields. A file that fails stays unopened, the
+reason is shown under the listing, and no sidecar is created for it. A file that passes opens
+straight into the review screen. Review flags such as `--filter` apply to the file you open.
 
 ### Review flags
 

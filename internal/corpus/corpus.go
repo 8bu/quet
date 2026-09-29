@@ -65,6 +65,33 @@ func Load(path string) (*Corpus, error) {
 	}
 }
 
+// Supported reports whether path has an extension Load understands
+// (.jsonl, .json or .txt, case-insensitive).
+func Supported(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jsonl", ".json", ".txt":
+		return true
+	}
+	return false
+}
+
+// Usable reports why a loaded corpus is not worth reviewing: it has no
+// records, or no record carries any text. nil means it is usable.
+func (c *Corpus) Usable() error {
+	if len(c.Records) == 0 {
+		return errors.New("no records found")
+	}
+	for i := range c.Records {
+		if strings.TrimSpace(c.Records[i].Text) != "" {
+			return nil
+		}
+	}
+	if c.Format == "txt" {
+		return errors.New("every line is blank")
+	}
+	return fmt.Errorf("no record has text (looked for a %s field)", strings.Join(textKeys, ", "))
+}
+
 // loader accumulates records while keeping IDs unique.
 type loader struct {
 	corpus    *Corpus

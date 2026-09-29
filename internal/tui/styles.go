@@ -13,6 +13,7 @@ var (
 	styleMuted         = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	styleFooter        = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	styleStatus        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("114"))
+	styleError         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
 	styleHelpGroup     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	styleHelpKey       = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
 	styleHelpDesc      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))

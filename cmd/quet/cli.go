@@ -48,7 +48,8 @@ func usagef(format string, args ...any) error {
 
 // parseArgs parses a command line. The corpus argument and flags may appear in any order;
 // --flag value and --flag=value are both accepted. The first positional "stats" or "export"
-// followed by a corpus argument selects that subcommand ("help" prints the help).
+// followed by a corpus argument selects that subcommand ("help" prints the help). With no
+// corpus argument the review TUI opens on the file browser.
 func parseArgs(args []string) (command, error) {
 	cmd := command{kind: "review", status: "approved"}
 
@@ -101,7 +102,8 @@ func parseArgs(args []string) (command, error) {
 	var rest []string
 	switch {
 	case len(positional) == 0:
-		return cmd, usagef("missing corpus file")
+		// No corpus: the TUI starts on the file browser.
+		return cmd, cmd.validate()
 	case positional[0] == "help":
 		if len(positional) > 1 {
 			return cmd, usagef("unexpected argument %q", positional[1])

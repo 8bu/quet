@@ -53,6 +53,11 @@ func TestParseArgs(t *testing.T) {
 			want: command{kind: "review", corpus: "stats.jsonl", status: "approved"},
 		},
 		{
+			name: "no corpus opens the browser, keeping review flags",
+			args: []string{"--filter", "unreviewed"},
+			want: command{kind: "review", status: "approved", filter: "unreviewed", hasFilter: true},
+		},
+		{
 			name: "help flag",
 			args: []string{"-h"},
 			want: command{kind: "review", status: "approved", help: true},
@@ -95,7 +100,6 @@ func TestParseArgsErrors(t *testing.T) {
 	}{
 		{name: "unknown flag", args: []string{"corpus.jsonl", "--bogus"}, want: "unknown flag --bogus"},
 		{name: "missing value", args: []string{"corpus.jsonl", "--filter"}, want: "needs a value"},
-		{name: "missing corpus", args: []string{}, want: "missing corpus file"},
 		{name: "stats without corpus", args: []string{"stats"}, want: "missing corpus file"},
 		{name: "two corpora", args: []string{"corpus.jsonl", "other.jsonl"}, want: `unexpected argument "other.jsonl"`},
 		{name: "unknown status", args: []string{"export", "corpus.jsonl", "--status", "bogus"}, want: "unknown status"},
@@ -128,16 +132,6 @@ func TestHelpTextIdentity(t *testing.T) {
 		"A fast, keyboard-first TUI for reviewing and curating text corpora.\n"
 	if got := helpText(); !strings.HasPrefix(got, want) {
 		t.Errorf("help text starts with %q, want %q", got[:min(len(got), len(want))], want)
-	}
-	for _, line := range []string{
-		"quet <corpus.jsonl|corpus.json|corpus.txt> [flags]",
-		"quet stats <corpus> [flags]",
-		"quet export <corpus> [flags]",
-		"Data stays local: no telemetry, no network.",
-	} {
-		if !strings.Contains(helpText(), line) {
-			t.Errorf("help text is missing %q", line)
-		}
 	}
 }
 

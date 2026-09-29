@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Running `quet` without a corpus, or with a directory, opens a file browser that lists folders and
+  `.jsonl`/`.json`/`.txt` files and marks files that already have review progress. Opening a file
+  runs a gate (it must parse and hold at least one record with text) before any sidecar is
+  created; rejected files show the reason and stay unopened.
+
 ### Changed
 
 - The record panel now shrinks to fit the record's text, so the details panel sits directly

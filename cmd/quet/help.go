@@ -8,10 +8,13 @@ func helpText() string {
 A fast, keyboard-first TUI for reviewing and curating text corpora.
 
 Usage:
-  quet <corpus.jsonl|corpus.json|corpus.txt> [flags]
+  quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
   quet help
+
+Without a corpus, or given a directory, quet opens a file browser: w/s move,
+enter open, a up a folder, . hidden files, q quit.
 
 Flags (any position; --flag value and --flag=value are both accepted):
   --config <path>       config file to use instead of ./quet.yaml
