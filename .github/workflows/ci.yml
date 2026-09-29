@@ -1,0 +1,51 @@
+# Every push is formatted, vetted, tested and cross-compiled for every release
+# target, so a platform-specific break never waits for a release to show up.
+#
+# - push only: `pull_request` would double-run the same SHA (no forks here).
+# - paths-ignore: docs can't break the build. NOTE: if branch protection with a
+#   required CI check is ever enabled, remove paths-ignore (a skipped run posts
+#   no status and would leave the required check pending forever).
+# - one job: Go setup dominates the run time and would be paid once per job;
+#   splitting checks across jobs buys nothing at this size.
+# - cheapest, highest-signal first: gofmt and vet fail in seconds, the race
+#   tests next, then `make release` builds the same four binaries a release
+#   ships. They are kept for a week as a workflow artifact, so any commit can
+#   be tried without cutting a release.
+# - Go version comes from go.mod — the single pin.
+name: CI
+on:
+  push:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Full history: `make release` stamps the version from `git describe`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make fmt
+      - run: make vet
+      - run: shellcheck install.sh .github/scripts/*.sh
+      - run: make race
+      - run: make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quet-${{ github.sha }}
+          path: dist/
+          retention-days: 7

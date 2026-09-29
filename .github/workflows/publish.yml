@@ -1,0 +1,123 @@
+# Publishes a release tag: builds the binaries, attaches them to the GitHub
+# Release, and points the Homebrew tap at them. It lives in its own workflow
+# file because two things reach it: release.yml calls it (workflow_call) with
+# the tag release-please just cut, and a maintainer dispatches it by hand to
+# re-publish a tag or backfill one that predates this workflow.
+#
+# - checks out the tag and re-runs the checks there, so a release is built from
+#   the exact tree that was tagged, never from a moving branch.
+# - assets have no version in their names (quet_<os>_<arch>, SHA256SUMS,
+#   install.sh), so /releases/latest/download/<asset> always resolves to the
+#   newest release — that is the URL install.sh and the docs use.
+# - `--clobber` makes re-running safe: the assets are replaced, not duplicated.
+#   A dispatched tag with no GitHub Release yet gets one created first.
+# - the Homebrew step is skipped (with a notice) until HOMEBREW_TAP_TOKEN is
+#   set, so the pipeline works before the tap exists.
+# - one publish per tag at a time, never cancelled mid-upload.
+#
+# Repo secret (optional until Homebrew ships): HOMEBREW_TAP_TOKEN — a
+# fine-grained token with Contents: read and write on the tap repository only.
+name: Publish
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v0.2.0
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish or re-publish, for example v0.1.0
+        required: true
+        type: string
+
+concurrency:
+  group: publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TAP_REPO: 8bu/homebrew-tap
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # Before checkout: a bad tag is the one failure worth naming, and the
+      # version every later step uses is derived from it.
+      - name: Validate tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::tag must look like v1.2.3, got '$TAG'"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: make check
+      - run: make release VERSION=${{ steps.tag.outputs.version }}
+
+      # The linux/amd64 binary runs on this runner: prove the stamp is right
+      # before anything is uploaded.
+      - name: Check version stamp
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          got=$(./dist/quet_linux_amd64 --version)
+          echo "$got"
+          case "$got" in
+            "quet $VERSION "*) ;;
+            *) echo "::error::binary reports '$got', want quet $VERSION"; exit 1 ;;
+          esac
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes "See CHANGELOG.md for what changed."
+          fi
+          gh release upload "$TAG" dist/quet_* dist/SHA256SUMS install.sh --clobber
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew tap update"
+            exit 0
+          fi
+          base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          .github/scripts/homebrew-formula.sh "$VERSION" "$base" dist/SHA256SUMS > tap/Formula/quet.rb
+          cd tap
+          git add Formula/quet.rb
+          if git diff --cached --quiet; then
+            echo "Formula already at $VERSION"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "quet ${VERSION}"
+          git push origin HEAD

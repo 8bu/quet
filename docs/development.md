@@ -30,6 +30,10 @@ flags.yaml               manual flag taxonomy (the default search location)
 configs/                 copyable starting-point quet.yaml
 examples/                small example corpora in all three formats
 docs/                    user documentation
+install.sh               curl | sh installer, attached to every release
+.github/workflows/       CI, release-please, and the publish workflow
+.github/scripts/         Homebrew formula generator
+release-please-config.json, .release-please-manifest.json   release-please settings and current version
 ```
 
 Tests live next to the code they cover (`internal/<package>/*_test.go`, `cmd/quet/*_test.go`); they
@@ -40,16 +44,38 @@ default output paths, and a full review → export round trip.
 and that loading leaves it byte-identical, and the docs quote its `stats` and export output. Update
 all three when changing it.
 
+## CI
+
+Every push runs `.github/workflows/ci.yml`: `gofmt`, `go vet`, shellcheck on the shell scripts, the
+tests under the race detector, and `make release`. The four binaries are kept for a week as a
+workflow artifact, so any commit can be tried without cutting a release.
+
 ## Releasing
 
-Quet is a single static binary with no runtime dependencies, so a release is a tag plus a set of
-cross-compiled artifacts.
+Releases are automated with [release-please](https://github.com/googleapis/release-please); nobody
+tags by hand.
 
-1. Move the `## [Unreleased]` entries in `CHANGELOG.md` into a new version section and commit that.
-2. Tag the release: `git tag -a v0.1.0 -m "Quet 0.1.0"`.
-3. Build the artifacts: `make release` writes `dist/quet_<os>_<arch>` for darwin and linux on arm64
-   and amd64, plus `dist/SHA256SUMS`.
-4. Push the tag and attach everything in `dist/` to the release.
+1. Commit to `main` with [conventional commits](https://www.conventionalcommits.org/): `feat:` bumps
+   the minor version, `fix:` and `perf:` bump the patch, and `chore:`, `docs:`, `test:`, `refactor:`,
+   `ci:` and `build:` release nothing.
+2. release-please keeps one Release PR open (`chore: release x.y.z`). It updates `CHANGELOG.md` from
+   the commit subjects and bumps the version in `internal/version/version.go` and
+   `.release-please-manifest.json`.
+3. Merging that PR tags `vx.y.z` and creates the GitHub Release. The same run then calls
+   `.github/workflows/publish.yml`, which checks out the tag, runs `make check` and `make release`,
+   confirms the binary reports the right version, and attaches `quet_<os>_<arch>`, `SHA256SUMS`
+   and `install.sh` to the release. If `HOMEBREW_TAP_TOKEN` is set, it also rewrites
+   `Formula/quet.rb` in `8bu/homebrew-tap` from `.github/scripts/homebrew-formula.sh`.
+
+To re-publish a tag (or publish one that predates the workflow), run the Publish workflow by hand
+from the Actions tab with that tag. Uploads use `--clobber`, so re-running replaces the assets.
+
+One-time repository setup:
+
+- Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests",
+  so release-please can open the Release PR.
+- Secret `HOMEBREW_TAP_TOKEN`: a fine-grained token with Contents read/write on `8bu/homebrew-tap`
+  only. Until it exists, publishing skips the Homebrew step with a notice.
 
 Version metadata is injected at link time from `internal/version`, so a build made inside a checkout
 reports the tag or revision it came from:

@@ -1,0 +1,61 @@
+# Versioned releases. release-please (manifest mode) keeps one open Release PR
+# on main; merging it tags v<version>, writes the GitHub Release, and bumps the
+# version in CHANGELOG.md and internal/version/version.go. Conventional commit
+# types drive the bump: feat → minor, fix/perf → patch, hidden types → no
+# release at all. Below 1.0 a breaking change bumps minor (bump-minor-pre-major).
+#
+# - `release`: runs on every push to main and either opens/updates the Release
+#   PR or, when that PR was just merged, creates the release.
+# - `publish`: a tag is not shipped until its binaries are attached, so the
+#   release job hands it straight to publish.yml — the same workflow a
+#   maintainer dispatches by hand to re-publish or backfill a tag. It is gated
+#   on release_created, so an open Release PR publishes nothing. The Release
+#   PR and the release are made with GITHUB_TOKEN, which never triggers other
+#   workflows; calling publish.yml here is what gets the binaries built.
+#
+# One-time repo setup: Settings → Actions → General → "Allow GitHub Actions to
+# create and approve pull requests" — the Release PR is opened with the
+# workflow token, and no token is allowed to open PRs until that is enabled.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release
+    if: ${{ needs.release.outputs.release_created == 'true' }}
+    # contents: write is what uploading release assets needs, and it is the
+    # ceiling here too — a caller's permissions cap the called workflow's.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.release.outputs.tag_name }}
+    secrets: inherit
