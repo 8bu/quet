@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/8bu/quet/internal/review"
@@ -10,8 +11,9 @@ import (
 
 // command is a parsed command line: what to do, with which corpus, and the flags for it.
 type command struct {
-	kind   string // "review" (default), "stats", "export", "init" or "update"
+	kind   string // "review" (default), "stats", "export", "init", "update", or a scripting command: "list", "show", "set", "flag", "suggest", "edit", "undo"
 	corpus string
+	ids    []string // record IDs after the corpus (scripting commands)
 
 	help    bool
 	version bool
@@ -27,7 +29,7 @@ type command struct {
 	configPath   string
 	hasConfig    bool
 
-	// export flags
+	// export flags (--status is also the review status for `quet set`)
 	status     string
 	hasStatus  bool
 	output     string
@@ -44,6 +46,20 @@ type command struct {
 
 	// update flags
 	check bool
+
+	// scripting flags
+	json        bool
+	limit       int
+	hasLimit    bool
+	add         []string
+	hasAdd      bool
+	remove      []string
+	hasRemove   bool
+	text        string
+	hasText     bool
+	textFile    string
+	hasTextFile bool
+	revert      bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -56,10 +72,11 @@ func usagef(format string, args ...any) error {
 }
 
 // parseArgs parses a command line. The corpus argument and flags may appear in any order;
-// --flag value and --flag=value are both accepted. The first positional "stats" or "export"
-// followed by a corpus argument selects that subcommand; "init" (no corpus) writes starter
-// config files, "update" (no corpus) updates the binary and "help" prints the help. With no
-// corpus argument the review TUI opens on the file browser.
+// --flag value and --flag=value are both accepted. The first positional "stats", "export"
+// or a scripting command (list, show, set, flag, suggest, edit, undo) followed by a corpus
+// argument selects that subcommand; the scripting commands take record IDs after the corpus.
+// "init" (no corpus) writes starter config files, "update" (no corpus) updates the binary
+// and "help" prints the help. With no corpus argument the review TUI opens on the file browser.
 func parseArgs(args []string) (command, error) {
 	cmd := command{kind: "review", status: "approved"}
 
@@ -130,6 +147,18 @@ func parseArgs(args []string) (command, error) {
 		cmd.kind = positional[0]
 		cmd.corpus = positional[1]
 		rest = positional[2:]
+	case slices.Contains(scriptingKinds, positional[0]):
+		if len(positional) < 2 {
+			return cmd, usagef("missing corpus file")
+		}
+		cmd.kind = positional[0]
+		cmd.corpus = positional[1]
+		if len(positional) > 2 {
+			cmd.ids = positional[2:]
+		}
+		if err := cmd.checkIDs(); err != nil {
+			return cmd, err
+		}
 	default:
 		cmd.corpus = positional[0]
 		rest = positional[1:]
@@ -138,6 +167,34 @@ func parseArgs(args []string) (command, error) {
 		return cmd, usagef("unexpected argument %q", rest[0])
 	}
 	return cmd, cmd.validate()
+}
+
+// scriptingKinds are the commands that read or change review state without the TUI.
+var scriptingKinds = []string{"list", "show", "set", "flag", "suggest", "edit", "undo"}
+
+// scriptingFlags are the flags only the scripting commands (and `quet stats --json`) take.
+var scriptingFlags = []string{"--limit", "--json", "--add", "--remove", "--text", "--text-file", "--revert"}
+
+// checkIDs enforces how many record IDs each scripting command takes.
+func (c *command) checkIDs() error {
+	switch c.kind {
+	case "list", "undo":
+		if len(c.ids) > 0 {
+			return usagef("unexpected argument %q", c.ids[0])
+		}
+	case "show", "edit":
+		if len(c.ids) == 0 {
+			return usagef("`quet %s` needs a record id", c.kind)
+		}
+		if len(c.ids) > 1 {
+			return usagef("`quet %s` takes exactly one record id, got %d", c.kind, len(c.ids))
+		}
+	default:
+		if len(c.ids) == 0 {
+			return usagef("`quet %s` needs at least one record id", c.kind)
+		}
+	}
+	return nil
 }
 
 // splitFlag splits "--name=value" into its parts.
@@ -151,12 +208,14 @@ func splitFlag(arg string) (name, value string, hasValue bool) {
 // valueFlag reports whether name takes a value.
 func valueFlag(name string) bool {
 	switch name {
-	case "--filter", "--flags-file", "--config", "--status", "-o", "--output", "--format":
+	case "--filter", "--flags-file", "--config", "--status", "-o", "--output", "--format",
+		"--limit", "--add", "--remove", "--text", "--text-file":
 		return true
 	}
 	return false
 }
 
+// setValueFlag stores the value of a value flag.
 func (c *command) setValueFlag(name, value string) error {
 	switch name {
 	case "--filter":
@@ -171,12 +230,38 @@ func (c *command) setValueFlag(name, value string) error {
 		c.output, c.hasOutput = value, true
 	case "--format":
 		c.format, c.hasFormat = value, true
+	case "--limit":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return usagef("--limit needs a non-negative whole number, got %q", value)
+		}
+		c.limit, c.hasLimit = n, true
+	case "--add":
+		c.add, c.hasAdd = append(c.add, splitList(value)...), true
+	case "--remove":
+		c.remove, c.hasRemove = append(c.remove, splitList(value)...), true
+	case "--text":
+		c.text, c.hasText = value, true
+	case "--text-file":
+		c.textFile, c.hasTextFile = value, true
 	default:
 		return usagef("unknown flag %s", name)
 	}
 	return nil
 }
 
+// splitList splits a comma-separated flag value into trimmed, non-empty names.
+func splitList(value string) []string {
+	var names []string
+	for _, name := range strings.Split(value, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// setBoolFlag records a flag that takes no value.
 func (c *command) setBoolFlag(name string) error {
 	switch name {
 	case "-h", "--help":
@@ -193,6 +278,10 @@ func (c *command) setBoolFlag(name string) error {
 		c.global = true
 	case "--check":
 		c.check = true
+	case "--json":
+		c.json = true
+	case "--revert":
+		c.revert = true
 	default:
 		return usagef("unknown flag %s", name)
 	}
@@ -209,6 +298,8 @@ func (c *command) validate() error {
 		return c.validateOnly("--global", "--force")
 	case "update":
 		return c.validateOnly("--check")
+	case "list", "show", "set", "flag", "suggest", "edit", "undo":
+		return c.validateScripting()
 	}
 	if c.global {
 		return usagef("--global is only valid with `quet init`")
@@ -216,17 +307,23 @@ func (c *command) validate() error {
 	switch c.kind {
 	case "stats":
 		if c.hasFilter {
-			return usagef("--filter is only valid when reviewing")
+			return usagef("--filter is only valid when reviewing or with `quet list`")
 		}
 		if c.noSkipReviewed {
 			return usagef("--no-skip-reviewed is only valid when reviewing")
+		}
+		if err := c.rejectScripting("with `quet stats`", "--json"); err != nil {
+			return err
 		}
 	case "export":
 		if c.hasFilter {
-			return usagef("--filter is only valid when reviewing")
+			return usagef("--filter is only valid when reviewing or with `quet list`")
 		}
 		if c.noSkipReviewed {
 			return usagef("--no-skip-reviewed is only valid when reviewing")
+		}
+		if err := c.rejectScripting("with `quet export`"); err != nil {
+			return err
 		}
 		if _, err := statusPreset(c.status); err != nil {
 			return usagef("%s", err)
@@ -240,6 +337,9 @@ func (c *command) validate() error {
 				return usagef("%s", err)
 			}
 		}
+		if err := c.rejectScripting("when reviewing"); err != nil {
+			return err
+		}
 		switch {
 		case c.output != "" || c.hasOutput:
 			return usagef("--output is only valid with `quet export`")
@@ -250,7 +350,68 @@ func (c *command) validate() error {
 		case c.force:
 			return usagef("--force is only valid with `quet export` or `quet init`")
 		case c.hasStatus:
-			return usagef("--status is only valid with `quet export`")
+			return usagef("--status is only valid with `quet export` or `quet set`")
+		}
+	}
+	return nil
+}
+
+// validateScripting checks the flags of a scripting command: each takes --json, --config
+// and --flags-file plus its own flags, and the writing commands need something to do.
+func (c *command) validateScripting() error {
+	shared := []string{"--json", "--config", "--flags-file"}
+	switch c.kind {
+	case "list":
+		if err := c.validateOnly(append(shared, "--filter", "--limit")...); err != nil {
+			return err
+		}
+		if c.hasFilter {
+			if _, err := review.ParseFilter(c.filter); err != nil {
+				return usagef("%s", err)
+			}
+		}
+	case "show", "undo":
+		return c.validateOnly(shared...)
+	case "set":
+		if err := c.validateOnly(append(shared, "--status")...); err != nil {
+			return err
+		}
+		if !c.hasStatus {
+			return usagef("`quet set` needs --status (unreviewed, approved, rejected or needs_review)")
+		}
+		if _, err := review.ParseStatus(c.status); err != nil {
+			return usagef("%s", err)
+		}
+	case "flag", "suggest":
+		if err := c.validateOnly(append(shared, "--add", "--remove")...); err != nil {
+			return err
+		}
+		if len(c.add) == 0 && len(c.remove) == 0 {
+			return usagef("`quet %s` needs --add or --remove with at least one name", c.kind)
+		}
+	case "edit":
+		if err := c.validateOnly(append(shared, "--text", "--text-file", "--revert")...); err != nil {
+			return err
+		}
+		given := 0
+		for _, set := range []bool{c.hasText, c.hasTextFile, c.revert} {
+			if set {
+				given++
+			}
+		}
+		if given != 1 {
+			return usagef("`quet edit` needs exactly one of --text, --text-file or --revert")
+		}
+	}
+	return nil
+}
+
+// rejectScripting rejects the scripting-only flags given to a command that does not take
+// them, except those in allowed; where completes the message ("with `quet stats`").
+func (c *command) rejectScripting(where string, allowed ...string) error {
+	for _, flag := range c.givenFlags() {
+		if slices.Contains(scriptingFlags, flag) && !slices.Contains(allowed, flag) {
+			return usagef("%s is not valid %s", flag, where)
 		}
 	}
 	return nil
@@ -285,5 +446,12 @@ func (c *command) givenFlags() []string {
 	add(c.force, "--force")
 	add(c.global, "--global")
 	add(c.check, "--check")
+	add(c.hasLimit, "--limit")
+	add(c.json, "--json")
+	add(c.hasAdd, "--add")
+	add(c.hasRemove, "--remove")
+	add(c.hasText, "--text")
+	add(c.hasTextFile, "--text-file")
+	add(c.revert, "--revert")
 	return flags
 }

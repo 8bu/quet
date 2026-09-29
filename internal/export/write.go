@@ -58,7 +58,7 @@ func Write(s *review.Session, w io.Writer, opt Options) (int, error) {
 		rec := s.Record(i)
 		var extra []corpus.KV
 		if opt.WithReview {
-			value, err := marshalMeta(rec, state)
+			value, err := marshalMeta(rec, state, s.SuggestedFlags(i))
 			if err != nil {
 				return written, err
 			}
@@ -83,13 +83,14 @@ func Write(s *review.Session, w io.Writer, opt Options) (int, error) {
 }
 
 // marshalMeta builds the "quet" object for a record as compact, HTML-unescaped JSON.
-func marshalMeta(rec *corpus.Record, state review.State) (json.RawMessage, error) {
+// suggested is the record's effective suggested flags (review.Session.SuggestedFlags).
+func marshalMeta(rec *corpus.Record, state review.State, suggested []string) (json.RawMessage, error) {
 	meta := quetMeta{
 		ID:             rec.ID,
 		Status:         string(state.EffectiveStatus()),
 		Edited:         state.Edited(),
 		ManualFlags:    nonNil(state.ManualFlags),
-		SuggestedFlags: nonNil(rec.SuggestedFlags),
+		SuggestedFlags: nonNil(suggested),
 	}
 	if state.Edited() {
 		original := rec.Text

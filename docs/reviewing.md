@@ -64,8 +64,9 @@ The two kinds of flags are kept separate and never merged blindly:
 
 - **manual flags** — your own labels, defined in `flags.yaml`. They are not hard-coded, and you
   toggle them with `f`.
-- **suggested flags** — taken from the imported metadata (`suggested_flags` in the source file) and
-  shown separately; they are reserved for external reviewers. No model is called, ever.
+- **suggested flags** — hints reserved for external reviewers: `suggested_flags` in the imported
+  metadata, plus any added with [`quet suggest`](scripting.md) (stored in the sidecar). They are
+  shown separately and are read-only in the TUI. Quet itself never calls a model.
 
 [Diagnostics](diagnostics.md) such as `duplicate` or `too_long` are not flags: Quet computes them
 locally as hints, they are not part of the review data, and they are never exported.

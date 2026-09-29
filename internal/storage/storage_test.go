@@ -373,3 +373,125 @@ func TestOpenMigratesV1Sidecar(t *testing.T) {
 		t.Fatalf("LoadAll after reopen = (%d records, %v), want 3", len(all), err)
 	}
 }
+
+// v2Schema is the version 2 sidecar DDL, whose records table has no suggested_flags column
+// and whose event blobs carry no suggested_flags key.
+var v2Schema = []string{
+	`CREATE TABLE meta (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL)`,
+	`CREATE TABLE records (
+		id           TEXT PRIMARY KEY,
+		status       TEXT NOT NULL,
+		edited_text  TEXT,
+		original_text TEXT,
+		manual_flags TEXT NOT NULL DEFAULT '[]',
+		annotations  TEXT,
+		updated_at   TEXT NOT NULL)`,
+	`CREATE TABLE events (
+		seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+		at           TEXT NOT NULL,
+		record_id    TEXT NOT NULL,
+		kind         TEXT NOT NULL,
+		before_state TEXT NOT NULL,
+		after_state  TEXT NOT NULL,
+		undone       INTEGER NOT NULL DEFAULT 0)`,
+	`INSERT INTO meta (key, value) VALUES ('schema_version', '2')`,
+	`INSERT INTO records (id, status, edited_text, original_text, manual_flags, annotations, updated_at) VALUES
+		('note-001', 'approved', NULL, 'one', '[]', NULL, '2026-01-01T00:00:00Z'),
+		('note-002', 'rejected', 'two fixed', 'two', '["slang","typo"]', '{"k":1}', '2026-01-01T00:00:01Z')`,
+	`INSERT INTO events (at, record_id, kind, before_state, after_state) VALUES
+		('2026-01-01T00:00:00Z', 'note-001', 'status',
+			'{"status":"unreviewed","edited_text":null,"manual_flags":[],"annotations":null}',
+			'{"status":"approved","edited_text":null,"manual_flags":[],"annotations":null}'),
+		('2026-01-01T00:00:01Z', 'note-002', 'status',
+			'{"status":"needs_review","edited_text":"two fixed","manual_flags":["slang","typo"],"annotations":{"k":1}}',
+			'{"status":"rejected","edited_text":"two fixed","manual_flags":["slang","typo"],"annotations":{"k":1}}')`,
+}
+
+func TestOpenMigratesV2SidecarAddingSuggestedFlags(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corpus.jsonl.quet.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open raw: %v", err)
+	}
+	for _, stmt := range v2Schema {
+		if _, err := raw.Exec(stmt); err != nil {
+			raw.Close()
+			t.Fatalf("build v2 sidecar: %v\n%s", err, stmt)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open v2 sidecar: %v", err)
+	}
+	defer s.Close()
+
+	if version, ok, err := s.GetMeta("schema_version"); err != nil || !ok || version != strconv.Itoa(schemaVersion) {
+		t.Fatalf("schema_version = (%q, %v, %v), want %d", version, ok, err, schemaVersion)
+	}
+	all, err := s.LoadAll()
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if got := all["note-001"]; got.Status != "approved" || got.SuggestedFlags != nil {
+		t.Errorf("note-001 = %+v, want approved with no suggested flags", got)
+	}
+	got := all["note-002"]
+	if got.Status != "rejected" || got.EditedText == nil || *got.EditedText != "two fixed" ||
+		strings.Join(got.ManualFlags, ",") != "slang,typo" || got.SuggestedFlags != nil ||
+		string(got.Annotations) != `{"k":1}` {
+		t.Errorf("note-002 = %+v, want rejected, edit, flags and annotations kept, no suggestions", got)
+	}
+
+	// Suggested flags persist on the migrated table and are undone like other state.
+	before := got
+	after := got
+	after.SuggestedFlags = []string{"offensive", "spam"}
+	if err := s.Apply("note-002", "two", "suggest", before, after); err != nil {
+		t.Fatalf("Apply suggest: %v", err)
+	}
+	if all, err = s.LoadAll(); err != nil || strings.Join(all["note-002"].SuggestedFlags, ",") != "offensive,spam" {
+		t.Fatalf("suggested flags after Apply = (%+v, %v), want offensive,spam", all["note-002"], err)
+	}
+	if id, restored, ok, err := s.Undo(); err != nil || !ok || id != "note-002" || restored.SuggestedFlags != nil {
+		t.Fatalf("Undo suggest = (%q, %+v, %v, %v), want note-002 without suggestions", id, restored, ok, err)
+	}
+
+	// Events written before the migration (no suggested_flags key) still undo.
+	if id, restored, ok, err := s.Undo(); err != nil || !ok || id != "note-002" ||
+		restored.Status != "needs_review" || restored.SuggestedFlags != nil {
+		t.Fatalf("Undo v2 event = (%q, %+v, %v, %v), want note-002 back to needs_review", id, restored, ok, err)
+	}
+	if all, err = s.LoadAll(); err != nil {
+		t.Fatalf("LoadAll after undo: %v", err)
+	}
+	if got := all["note-002"]; got.Status != "needs_review" || strings.Join(got.ManualFlags, ",") != "slang,typo" ||
+		got.SuggestedFlags != nil || storedOriginal(t, s, "note-002") != "two" {
+		t.Errorf("note-002 after undo = %+v, want needs_review, flags kept, no suggestions", got)
+	}
+
+	// Reopening an already migrated sidecar is a no-op.
+	again, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen migrated sidecar: %v", err)
+	}
+	defer again.Close()
+	if all, err := again.LoadAll(); err != nil || len(all) != 2 {
+		t.Fatalf("LoadAll after reopen = (%d records, %v), want 2", len(all), err)
+	}
+}
+
+// storedOriginal returns the stored original_text of record id.
+func storedOriginal(t *testing.T, s *Store, id string) string {
+	t.Helper()
+	var text string
+	if err := s.db.QueryRow(`SELECT original_text FROM records WHERE id = ?`, id).Scan(&text); err != nil {
+		t.Fatalf("original_text of %s: %v", id, err)
+	}
+	return text
+}

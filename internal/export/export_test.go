@@ -122,6 +122,10 @@ func TestWriteAndToFile(t *testing.T) {
 	if err := session.SetManualFlags([]string{"typo"}); err != nil {
 		t.Fatalf("SetManualFlags: %v", err)
 	}
+	session.Goto(0)
+	if err := session.SetSuggestedFlags([]string{"spam", "synthetic-looking"}); err != nil {
+		t.Fatalf("SetSuggestedFlags: %v", err)
+	}
 
 	t.Run("jsonl with review metadata", func(t *testing.T) {
 		var buf bytes.Buffer
@@ -152,8 +156,8 @@ func TestWriteAndToFile(t *testing.T) {
 		if !reflect.DeepEqual(meta["manual_flags"], []any{}) {
 			t.Errorf("manual_flags = %v, want []", meta["manual_flags"])
 		}
-		if !reflect.DeepEqual(meta["suggested_flags"], []any{"synthetic-looking"}) {
-			t.Errorf("suggested_flags = %v", meta["suggested_flags"])
+		if !reflect.DeepEqual(meta["suggested_flags"], []any{"spam", "synthetic-looking"}) {
+			t.Errorf("suggested_flags = %v, want corpus and sidecar suggestions [spam synthetic-looking]", meta["suggested_flags"])
 		}
 		for _, key := range []string{"auto_flags", "diagnostics"} {
 			if _, ok := meta[key]; ok {
@@ -205,6 +209,9 @@ func TestWriteAndToFile(t *testing.T) {
 		}
 		if !reflect.DeepEqual(meta["manual_flags"], []any{"typo"}) {
 			t.Errorf("manual_flags = %v, want [typo]", meta["manual_flags"])
+		}
+		if !reflect.DeepEqual(meta["suggested_flags"], []any{}) {
+			t.Errorf("suggested_flags = %v, want []", meta["suggested_flags"])
 		}
 	})
 

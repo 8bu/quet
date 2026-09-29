@@ -25,6 +25,24 @@ never overwritten without --force.
 quet update replaces this binary with the latest release after verifying it
 against the release's SHA256SUMS; --check only reports whether one exists.
 
+Scripting (no TUI): read and change the same review state and undo log as the
+review screen. Record ids are those printed by quet list.
+  quet list <corpus> [--filter f] [--limit N] [--json]
+  quet show <corpus> <id> [--json]
+  quet set <corpus> <id>... --status <unreviewed|approved|rejected|needs_review>
+      [--json]
+  quet flag <corpus> <id>... [--add a,b] [--remove c] [--json]
+  quet suggest <corpus> <id>... [--add a,b] [--remove c] [--json]
+  quet edit <corpus> <id> (--text <s> | --text-file <path|-> | --revert)
+      [--json]
+  quet undo <corpus> [--json]
+  quet stats <corpus> [--json]
+  quet export <corpus> -o -
+--json prints JSON (list: one record per line). flag sets manual flags named
+in flags.yaml; suggest sets free-form suggested flags; --add and --remove take
+comma-separated names and may repeat. --text-file - reads stdin. export -o -
+writes the records to stdout and its summary to stderr.
+
 Flags (any position; --flag value and --flag=value are both accepted):
   --config <path>       config file to use instead of ./quet.yaml
   --flags-file <path>   manual flag definitions instead of ./flags.yaml

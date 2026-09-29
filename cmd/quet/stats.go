@@ -19,6 +19,14 @@ func runStats(cmd command, stdout, stderr io.Writer) int {
 	}
 	defer session.Close()
 
+	if cmd.json {
+		if err := newEncoder(stdout).Encode(newStatsOut(cmd, session)); err != nil {
+			fmt.Fprintf(stderr, "quet: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	counts := session.Counts()
 	fmt.Fprintf(stdout, "%-13s%7d\n", "Total:", counts.Total)
 	fmt.Fprintf(stdout, "%-13s%7d\n", "Approved:", counts.Approved)
@@ -32,6 +40,56 @@ func runStats(cmd command, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "Corpus: %s\n", cmd.corpus)
 	fmt.Fprintf(stdout, "Sidecar: %s\n", storage.SidecarPath(cmd.corpus))
 	return 0
+}
+
+// statsOut is the JSON shape of `quet stats --json`.
+type statsOut struct {
+	Corpus      string         `json:"corpus"`
+	Sidecar     string         `json:"sidecar"`
+	Total       int            `json:"total"`
+	Approved    int            `json:"approved"`
+	Rejected    int            `json:"rejected"`
+	NeedsReview int            `json:"needs_review"`
+	Unreviewed  int            `json:"unreviewed"`
+	Edited      int            `json:"edited"`
+	Diagnostics map[string]int `json:"diagnostics"`
+	ManualFlags []flagCountOut `json:"manual_flags"`
+}
+
+// flagCountOut is one manual flag of the flags.yaml taxonomy with its usage count.
+type flagCountOut struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Count       int    `json:"count"`
+}
+
+// newStatsOut collects the review counts, diagnostic counts and the manual flag
+// taxonomy (flags.yaml order) with usage counts.
+func newStatsOut(cmd command, s *review.Session) statsOut {
+	counts := s.Counts()
+	out := statsOut{
+		Corpus:      cmd.corpus,
+		Sidecar:     storage.SidecarPath(cmd.corpus),
+		Total:       counts.Total,
+		Approved:    counts.Approved,
+		Rejected:    counts.Rejected,
+		NeedsReview: counts.NeedsReview,
+		Unreviewed:  counts.Unreviewed,
+		Edited:      counts.Edited,
+		Diagnostics: make(map[string]int),
+		ManualFlags: make([]flagCountOut, 0, len(s.FlagDefs)),
+	}
+	for _, f := range s.DiagnosticFacets() {
+		out.Diagnostics[f.Value] = f.Count
+	}
+	used := make(map[string]int)
+	for _, f := range s.ManualFacets() {
+		used[f.Value] = f.Count
+	}
+	for _, def := range s.FlagDefs {
+		out.ManualFlags = append(out.ManualFlags, flagCountOut{Name: def.Name, Description: def.Description, Count: used[def.Name]})
+	}
+	return out
 }
 
 // diagnosticSummary counts records per diagnostic, e.g.

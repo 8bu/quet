@@ -9,9 +9,10 @@ generate → quet → review → export
 ```
 
 Open a corpus, approve or reject each record with a single key, and export the records you kept.
-Everything is local: one static binary and one SQLite sidecar file next to your corpus. No
-telemetry, no network access unless you run `quet update` or opt in to `update.check`, and the
-source file is never modified.
+Every review action is also a plain command with JSON output, so scripts and AI agents can review
+without the TUI. Everything is local: one static binary and one SQLite sidecar file next to your
+corpus. No telemetry, no network access unless you run `quet update` or opt in to `update.check`,
+and the source file is never modified.
 
 ## Install
 
@@ -47,6 +48,15 @@ quet export examples/corpus.jsonl    # writes examples/corpus.approved.jsonl
 To customise diagnostic thresholds and manual flags, `quet init` writes a starter `quet.yaml` and
 `flags.yaml` (`c` in the TUI edits the config and reloads it).
 
+Everything can also be scripted, sharing the same review state and undo log as the TUI:
+
+```sh
+quet list examples/corpus.jsonl --filter unreviewed --json    # one JSON record per line
+quet set examples/corpus.jsonl id:note-001 --status approved
+```
+
+See [Scripting and agents](docs/scripting.md).
+
 ## Documentation
 
 | | |
@@ -56,6 +66,7 @@ To customise diagnostic thresholds and manual flags, `quet init` writes a starte
 | [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |
 | [Configuration](docs/configuration.md) | `quet.yaml`, `flags.yaml` and `quet init` |
+| [Scripting and agents](docs/scripting.md) | `list`, `show`, `set`, `flag`, `suggest`, `edit`, `undo`, JSON output, exit codes |
 | [Export](docs/export.md) | Presets, output files, review metadata |
 | [Development](docs/development.md) | Building, testing, layout, releasing |
 

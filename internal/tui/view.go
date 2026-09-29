@@ -190,7 +190,7 @@ func (m model) detailsContent(w, h int) ([]string, int) {
 
 	rows := []string{"id: " + r.ID, metaLine("source", r.Source), metaLine("batch", r.Batch)}
 	rows = append(rows, "manual: "+listOrDash(st.ManualFlags))
-	rows = append(rows, "suggested: "+listOrDash(r.SuggestedFlags))
+	rows = append(rows, "suggested: "+listOrDash(m.sess.SuggestedFlags(cur)))
 	if diags := m.sess.Diagnostics(cur); len(diags) > 0 {
 		names := make([]string, 0, len(diags))
 		for _, d := range diags {

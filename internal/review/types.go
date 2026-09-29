@@ -33,10 +33,11 @@ func ParseStatus(s string) (ReviewStatus, error) {
 
 // State is the mutable review state of one record. The zero value (Status "") means Unreviewed.
 type State struct {
-	Status      ReviewStatus
-	EditedText  *string         // nil = not edited; final text = *EditedText
-	ManualFlags []string        // sorted, unique
-	Annotations json.RawMessage // reserved for future structured annotations; nil for now
+	Status         ReviewStatus
+	EditedText     *string         // nil = not edited; final text = *EditedText
+	ManualFlags    []string        // sorted, unique
+	SuggestedFlags []string        // sidecar-added suggestions only (sorted, unique); see Session.SuggestedFlags
+	Annotations    json.RawMessage // reserved for future structured annotations; nil for now
 }
 
 func (s State) EffectiveStatus() ReviewStatus {
@@ -56,6 +57,7 @@ func (s State) Clone() State {
 		c.EditedText = &t
 	}
 	c.ManualFlags = append([]string(nil), s.ManualFlags...)
+	c.SuggestedFlags = append([]string(nil), s.SuggestedFlags...)
 	c.Annotations = append(json.RawMessage(nil), s.Annotations...)
 	if len(s.Annotations) == 0 {
 		c.Annotations = nil

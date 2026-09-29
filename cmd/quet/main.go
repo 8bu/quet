@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/mattn/go-isatty"
 	"gopkg.in/yaml.v3"
 
 	"github.com/8bu/quet/internal/config"
@@ -46,31 +47,62 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch cmd.kind {
 	case "update":
 		return runUpdate(cmd, stdout, stderr)
-	case "stats", "export", "init":
-		check := startCommandCheck(cmd)
+	case "review":
+		return runReview(cmd, stdout, stderr)
+	default:
+		// --json output is for machines: skip the update notice so nothing but the
+		// result is printed.
+		var check *pendingCheck
+		if !cmd.json {
+			check = startCommandCheck(cmd)
+		}
 		code := runOneShot(cmd, stdout, stderr)
 		check.notify(stderr)
 		return code
-	default:
-		return runReview(cmd, stdout, stderr)
 	}
 }
 
-// runOneShot runs a command that prints its result and exits: stats, export or init.
+// runOneShot runs a command that prints its result and exits: stats, export, init or
+// a scripting command (list, show, set, flag, suggest, edit, undo).
 func runOneShot(cmd command, stdout, stderr io.Writer) int {
 	switch cmd.kind {
 	case "stats":
 		return runStats(cmd, stdout, stderr)
 	case "export":
 		return runExport(cmd, stdout, stderr)
+	case "list":
+		return runList(cmd, stdout, stderr)
+	case "show":
+		return runShow(cmd, stdout, stderr)
+	case "set":
+		return runSet(cmd, stdout, stderr)
+	case "flag":
+		return runFlag(cmd, stdout, stderr)
+	case "suggest":
+		return runSuggest(cmd, stdout, stderr)
+	case "edit":
+		return runEdit(cmd, stdout, stderr)
+	case "undo":
+		return runUndo(cmd, stdout, stderr)
 	default:
 		return runInit(cmd, stdout, stderr)
 	}
 }
 
+// isInteractive reports whether stdin and stdout are both terminals, which the review
+// screen needs. Tests replace it.
+var isInteractive = func() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+}
+
 // runReview opens cmd.corpus in the TUI, or the file browser when no corpus is
-// given or it names a directory.
+// given or it names a directory. Without an interactive terminal it points to the
+// scripting commands instead of opening anything.
 func runReview(cmd command, stdout, stderr io.Writer) int {
+	if !isInteractive() {
+		fmt.Fprintln(stderr, "quet: the review screen needs an interactive terminal; use quet list/show/set/flag/suggest/edit for scripted review (see quet help)")
+		return 1
+	}
 	check := startCommandCheck(cmd)
 	if dir, ok := browseDir(cmd.corpus); ok {
 		return runBrowse(cmd, dir, check, stderr)

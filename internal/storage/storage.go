@@ -17,10 +17,11 @@ import (
 
 // RecordState is the persisted per-record state. Rows exist only for records that were ever touched.
 type RecordState struct {
-	Status      string  // "unreviewed" | "approved" | "rejected" | "needs_review"
-	EditedText  *string // nil = not edited
-	ManualFlags []string
-	Annotations json.RawMessage // reserved (future structured annotations), stored as JSON TEXT, nullable
+	Status         string  // "unreviewed" | "approved" | "rejected" | "needs_review"
+	EditedText     *string // nil = not edited
+	ManualFlags    []string
+	SuggestedFlags []string        // suggestions added through the sidecar (not the corpus metadata ones)
+	Annotations    json.RawMessage // reserved (future structured annotations), stored as JSON TEXT, nullable
 }
 
 // Event is one persisted mutation (audit log + undo stack).
@@ -28,7 +29,7 @@ type Event struct {
 	Seq      int64
 	At       time.Time
 	RecordID string
-	Kind     string // "status" | "edit" | "flags" | "undo"
+	Kind     string // "status" | "edit" | "flags" | "suggest" | "undo"
 	Before   RecordState
 	After    RecordState
 	Undone   bool
@@ -44,7 +45,9 @@ func SidecarPath(corpusPath string) string { return corpusPath + ".quet.db" }
 // schemaVersion is the current sidecar schema. History:
 //   - 1: initial schema (records carried an auto_flags column).
 //   - 2: records.auto_flags dropped; check results are computed locally, never persisted.
-const schemaVersion = 2
+//   - 3: records.suggested_flags added (suggestions added via the sidecar); undo blobs carry
+//     suggested_flags, older blobs without it restore an empty set.
+const schemaVersion = 3
 
 const (
 	createMetaTable = `CREATE TABLE IF NOT EXISTS meta (
@@ -57,6 +60,7 @@ const (
 		edited_text  TEXT,
 		original_text TEXT,
 		manual_flags TEXT NOT NULL DEFAULT '[]',
+		suggested_flags TEXT NOT NULL DEFAULT '[]',
 		annotations  TEXT,
 		updated_at   TEXT NOT NULL)`
 
@@ -70,24 +74,26 @@ const (
 		undone       INTEGER NOT NULL DEFAULT 0)`
 
 	upsertRecord = `INSERT INTO records
-		(id, status, edited_text, original_text, manual_flags, annotations, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		(id, status, edited_text, original_text, manual_flags, suggested_flags, annotations, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status       = excluded.status,
 			edited_text  = excluded.edited_text,
 			original_text = excluded.original_text,
 			manual_flags = excluded.manual_flags,
+			suggested_flags = excluded.suggested_flags,
 			annotations  = excluded.annotations,
 			updated_at   = excluded.updated_at`
 
 	// restoreRecord leaves original_text untouched: the before-state blob does not carry it.
 	restoreRecord = `INSERT INTO records
-		(id, status, edited_text, manual_flags, annotations, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		(id, status, edited_text, manual_flags, suggested_flags, annotations, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			status       = excluded.status,
 			edited_text  = excluded.edited_text,
 			manual_flags = excluded.manual_flags,
+			suggested_flags = excluded.suggested_flags,
 			annotations  = excluded.annotations,
 			updated_at   = excluded.updated_at`
 
@@ -126,7 +132,7 @@ func Open(path string) (*Store, error) {
 
 // migrate creates missing tables, then upgrades an older sidecar step by step to
 // schemaVersion, all in one transaction. Review state (statuses, edits, manual flags,
-// annotations, events) is preserved by every step.
+// suggested flags, annotations, events) is preserved by every step.
 func (s *Store) migrate() error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -145,6 +151,11 @@ func (s *Store) migrate() error {
 	}
 	if version < 2 {
 		if err := dropRecordsColumn(tx, "auto_flags"); err != nil {
+			return err
+		}
+	}
+	if version < 3 {
+		if err := addRecordsColumn(tx, "suggested_flags", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return err
 		}
 	}
@@ -180,19 +191,38 @@ func storedSchemaVersion(tx *sql.Tx) (int, error) {
 	return version, nil
 }
 
-// dropRecordsColumn drops column from the records table when it exists (no-op otherwise).
-func dropRecordsColumn(tx *sql.Tx, column string) error {
+// recordsHasColumn reports whether the records table has column.
+func recordsHasColumn(tx *sql.Tx, column string) (bool, error) {
 	var n int
 	if err := tx.QueryRow(
 		`SELECT COUNT(*) FROM pragma_table_info('records') WHERE name = ?`, column,
 	).Scan(&n); err != nil {
-		return fmt.Errorf("storage: inspect records.%s: %w", column, err)
+		return false, fmt.Errorf("storage: inspect records.%s: %w", column, err)
 	}
-	if n == 0 {
-		return nil
+	return n > 0, nil
+}
+
+// dropRecordsColumn drops column from the records table when it exists (no-op otherwise).
+func dropRecordsColumn(tx *sql.Tx, column string) error {
+	has, err := recordsHasColumn(tx, column)
+	if err != nil || !has {
+		return err
 	}
 	if _, err := tx.Exec(`ALTER TABLE records DROP COLUMN ` + column); err != nil {
 		return fmt.Errorf("storage: drop records.%s: %w", column, err)
+	}
+	return nil
+}
+
+// addRecordsColumn adds column (with the given type and constraints) to the records table
+// when it is missing (no-op otherwise, e.g. a table just created with the current DDL).
+func addRecordsColumn(tx *sql.Tx, column, definition string) error {
+	has, err := recordsHasColumn(tx, column)
+	if err != nil || has {
+		return err
+	}
+	if _, err := tx.Exec(`ALTER TABLE records ADD COLUMN ` + column + ` ` + definition); err != nil {
+		return fmt.Errorf("storage: add records.%s: %w", column, err)
 	}
 	return nil
 }
@@ -207,20 +237,25 @@ func (s *Store) Close() error {
 // stateBlob is the JSON form of a RecordState as stored in the events table, so Undo can
 // restore a record exactly.
 type stateBlob struct {
-	Status      string          `json:"status"`
-	EditedText  *string         `json:"edited_text"`
-	ManualFlags []string        `json:"manual_flags"`
-	Annotations json.RawMessage `json:"annotations"`
+	Status         string          `json:"status"`
+	EditedText     *string         `json:"edited_text"`
+	ManualFlags    []string        `json:"manual_flags"`
+	SuggestedFlags []string        `json:"suggested_flags"`
+	Annotations    json.RawMessage `json:"annotations"`
 }
 
 func encodeState(st RecordState) (string, error) {
 	blob := stateBlob{
-		Status:      st.Status,
-		EditedText:  st.EditedText,
-		ManualFlags: st.ManualFlags,
+		Status:         st.Status,
+		EditedText:     st.EditedText,
+		ManualFlags:    st.ManualFlags,
+		SuggestedFlags: st.SuggestedFlags,
 	}
 	if blob.ManualFlags == nil {
 		blob.ManualFlags = []string{}
+	}
+	if blob.SuggestedFlags == nil {
+		blob.SuggestedFlags = []string{}
 	}
 	if len(st.Annotations) > 0 {
 		blob.Annotations = st.Annotations
@@ -232,19 +267,25 @@ func encodeState(st RecordState) (string, error) {
 	return string(out), nil
 }
 
+// decodeState parses an event blob. Blobs written before schema 3 lack suggested_flags;
+// they decode to no sidecar suggestions, which is what those records had.
 func decodeState(raw string) (RecordState, error) {
 	var blob stateBlob
 	if err := json.Unmarshal([]byte(raw), &blob); err != nil {
 		return RecordState{}, fmt.Errorf("storage: decode state: %w", err)
 	}
 	st := RecordState{
-		Status:      blob.Status,
-		EditedText:  blob.EditedText,
-		ManualFlags: blob.ManualFlags,
-		Annotations: blob.Annotations,
+		Status:         blob.Status,
+		EditedText:     blob.EditedText,
+		ManualFlags:    blob.ManualFlags,
+		SuggestedFlags: blob.SuggestedFlags,
+		Annotations:    blob.Annotations,
 	}
 	if len(st.ManualFlags) == 0 {
 		st.ManualFlags = nil
+	}
+	if len(st.SuggestedFlags) == 0 {
+		st.SuggestedFlags = nil
 	}
 	if len(st.Annotations) == 0 || string(st.Annotations) == "null" {
 		st.Annotations = nil
@@ -252,16 +293,29 @@ func decodeState(raw string) (RecordState, error) {
 	return st, nil
 }
 
-// manualFlagsJSON renders manual flags for the records table (never NULL).
-func manualFlagsJSON(flags []string) (string, error) {
+// flagsJSON renders a flag list for a records table column (never NULL); what names the
+// column in errors.
+func flagsJSON(what string, flags []string) (string, error) {
 	if flags == nil {
 		return "[]", nil
 	}
 	out, err := json.Marshal(flags)
 	if err != nil {
-		return "", fmt.Errorf("storage: encode manual flags: %w", err)
+		return "", fmt.Errorf("storage: encode %s: %w", what, err)
 	}
 	return string(out), nil
+}
+
+// decodeFlags parses a flag-list column; an empty list decodes to nil.
+func decodeFlags(id, what, raw string) ([]string, error) {
+	var flags []string
+	if err := json.Unmarshal([]byte(raw), &flags); err != nil {
+		return nil, fmt.Errorf("storage: record %s: %s: %w", id, what, err)
+	}
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	return flags, nil
 }
 
 // annotationsArg renders annotations as a nullable TEXT value.
@@ -275,7 +329,7 @@ func annotationsArg(annotations json.RawMessage) any {
 // LoadAll returns all persisted states keyed by record ID.
 func (s *Store) LoadAll() (map[string]RecordState, error) {
 	rows, err := s.db.Query(
-		`SELECT id, status, edited_text, manual_flags, annotations FROM records`)
+		`SELECT id, status, edited_text, manual_flags, suggested_flags, annotations FROM records`)
 	if err != nil {
 		return nil, fmt.Errorf("storage: load records: %w", err)
 	}
@@ -284,13 +338,14 @@ func (s *Store) LoadAll() (map[string]RecordState, error) {
 	out := make(map[string]RecordState)
 	for rows.Next() {
 		var (
-			id          string
-			status      string
-			edited      sql.NullString
-			manualRaw   string
-			annotations sql.NullString
+			id           string
+			status       string
+			edited       sql.NullString
+			manualRaw    string
+			suggestedRaw string
+			annotations  sql.NullString
 		)
-		if err := rows.Scan(&id, &status, &edited, &manualRaw, &annotations); err != nil {
+		if err := rows.Scan(&id, &status, &edited, &manualRaw, &suggestedRaw, &annotations); err != nil {
 			return nil, fmt.Errorf("storage: scan record: %w", err)
 		}
 		st := RecordState{Status: status}
@@ -298,11 +353,11 @@ func (s *Store) LoadAll() (map[string]RecordState, error) {
 			text := edited.String
 			st.EditedText = &text
 		}
-		if err := json.Unmarshal([]byte(manualRaw), &st.ManualFlags); err != nil {
-			return nil, fmt.Errorf("storage: record %s: manual flags: %w", id, err)
+		if st.ManualFlags, err = decodeFlags(id, "manual flags", manualRaw); err != nil {
+			return nil, err
 		}
-		if len(st.ManualFlags) == 0 {
-			st.ManualFlags = nil
+		if st.SuggestedFlags, err = decodeFlags(id, "suggested flags", suggestedRaw); err != nil {
+			return nil, err
 		}
 		if annotations.Valid && annotations.String != "" && annotations.String != "null" {
 			st.Annotations = json.RawMessage(annotations.String)
@@ -330,7 +385,11 @@ func (s *Store) Apply(recordID, originalText, kind string, before, after RecordS
 	if err != nil {
 		return err
 	}
-	manualJSON, err := manualFlagsJSON(after.ManualFlags)
+	manualJSON, err := flagsJSON("manual flags", after.ManualFlags)
+	if err != nil {
+		return err
+	}
+	suggestedJSON, err := flagsJSON("suggested flags", after.SuggestedFlags)
 	if err != nil {
 		return err
 	}
@@ -342,7 +401,7 @@ func (s *Store) Apply(recordID, originalText, kind string, before, after RecordS
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(upsertRecord,
-		recordID, after.Status, after.EditedText, originalText, manualJSON,
+		recordID, after.Status, after.EditedText, originalText, manualJSON, suggestedJSON,
 		annotationsArg(after.Annotations), now,
 	); err != nil {
 		return fmt.Errorf("storage: save record %s: %w", recordID, err)
@@ -382,7 +441,11 @@ func (s *Store) Undo() (recordID string, restored RecordState, ok bool, err erro
 	if err != nil {
 		return "", RecordState{}, false, err
 	}
-	manualJSON, err := manualFlagsJSON(restored.ManualFlags)
+	manualJSON, err := flagsJSON("manual flags", restored.ManualFlags)
+	if err != nil {
+		return "", RecordState{}, false, err
+	}
+	suggestedJSON, err := flagsJSON("suggested flags", restored.SuggestedFlags)
 	if err != nil {
 		return "", RecordState{}, false, err
 	}
@@ -391,7 +454,7 @@ func (s *Store) Undo() (recordID string, restored RecordState, ok bool, err erro
 		return "", RecordState{}, false, fmt.Errorf("storage: mark event undone: %w", err)
 	}
 	if _, err := tx.Exec(restoreRecord,
-		recordID, restored.Status, restored.EditedText, manualJSON,
+		recordID, restored.Status, restored.EditedText, manualJSON, suggestedJSON,
 		annotationsArg(restored.Annotations), time.Now().UTC().Format(time.RFC3339Nano),
 	); err != nil {
 		return "", RecordState{}, false, fmt.Errorf("storage: restore record %s: %w", recordID, err)

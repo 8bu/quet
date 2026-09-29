@@ -479,6 +479,86 @@ func TestManualFlagsAndFacets(t *testing.T) {
 	}
 }
 
+func TestSuggestedFlagsPersistMergeAndUndo(t *testing.T) {
+	path := writeCorpus(t, corpusLines)
+	s := openSession(t, path, testConfig())
+
+	s.Goto(0) // n1: corpus metadata suggests slang
+	if err := s.SetSuggestedFlags([]string{" spam ", "slang", "offensive", "spam", ""}); err != nil {
+		t.Fatalf("SetSuggestedFlags: %v", err)
+	}
+	if got, want := strings.Join(s.State(0).SuggestedFlags, ","), "offensive,spam"; got != want {
+		t.Fatalf("stored SuggestedFlags = %q, want %q (metadata names dropped)", got, want)
+	}
+	if got, want := strings.Join(s.SuggestedFlags(0), ","), "offensive,slang,spam"; got != want {
+		t.Fatalf("SuggestedFlags(0) = %q, want %q", got, want)
+	}
+	if got := s.SuggestedFlags(1); got == nil || len(got) != 0 {
+		t.Fatalf("SuggestedFlags(1) = %#v, want empty non-nil", got)
+	}
+	if got, want := facetString(s.SuggestedFacets()), "offensive=1,slang=1,spam=1,typo=1"; got != want {
+		t.Fatalf("SuggestedFacets = %s, want %s", got, want)
+	}
+	if got := s.SetFilter(Filter{Kind: FilterSuggested, Value: "spam"}); got != 1 {
+		t.Fatalf("SetFilter(suggested:spam) = %d, want 1", got)
+	}
+	s.SetFilter(Filter{Kind: FilterAll})
+
+	// A set equal to the stored one (after dropping metadata names) records no event.
+	events, err := s.Store.CountEvents()
+	if err != nil {
+		t.Fatalf("CountEvents: %v", err)
+	}
+	s.Goto(0)
+	if err := s.SetSuggestedFlags([]string{"slang", "spam", "offensive"}); err != nil {
+		t.Fatalf("SetSuggestedFlags: %v", err)
+	}
+	if n, err := s.Store.CountEvents(); err != nil || n != events {
+		t.Fatalf("CountEvents after no-op = (%d, %v), want %d", n, err, events)
+	}
+	if err := s.SetSuggestedFlags([]string{"spam"}); err != nil {
+		t.Fatalf("SetSuggestedFlags: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openSession(t, path, testConfig())
+	if got, want := strings.Join(reopened.State(0).SuggestedFlags, ","), "spam"; got != want {
+		t.Fatalf("SuggestedFlags after reopen = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(reopened.SuggestedFlags(0), ","), "slang,spam"; got != want {
+		t.Fatalf("SuggestedFlags(0) after reopen = %q, want %q", got, want)
+	}
+	if ok, i, err := reopened.Undo(); err != nil || !ok || i != 0 {
+		t.Fatalf("Undo = (%v, %d, %v), want (true, 0, nil)", ok, i, err)
+	}
+	if got, want := strings.Join(reopened.SuggestedFlags(0), ","), "offensive,slang,spam"; got != want {
+		t.Fatalf("SuggestedFlags(0) after undo = %q, want %q", got, want)
+	}
+	if ok, _, err := reopened.Undo(); err != nil || !ok {
+		t.Fatalf("second Undo = (%v, %v), want ok", ok, err)
+	}
+	if got := reopened.State(0).SuggestedFlags; got != nil {
+		t.Fatalf("stored SuggestedFlags after undoing all = %v, want nil", got)
+	}
+	if got, want := strings.Join(reopened.SuggestedFlags(0), ","), "slang"; got != want {
+		t.Fatalf("SuggestedFlags(0) after undoing all = %q, want %q (metadata only)", got, want)
+	}
+}
+
+func TestIndex(t *testing.T) {
+	s := openSession(t, writeCorpus(t, corpusLines), testConfig())
+	if i, ok := s.Index("id:n3"); !ok || i != 2 {
+		t.Fatalf("Index(id:n3) = (%d, %v), want (2, true)", i, ok)
+	}
+	for _, id := range []string{"n3", "id:missing", ""} {
+		if i, ok := s.Index(id); ok {
+			t.Errorf("Index(%q) = (%d, true), want not found", id, i)
+		}
+	}
+}
+
 func TestSearch(t *testing.T) {
 	path := writeCorpus(t, corpusLines)
 	s := openSession(t, path, testConfig())

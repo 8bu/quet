@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -102,6 +104,66 @@ func TestParseArgs(t *testing.T) {
 			args: []string{"update", "--check"},
 			want: command{kind: "update", status: "approved", check: true},
 		},
+		{
+			name: "list with filter, limit and json",
+			args: []string{"list", "corpus.jsonl", "--filter", "unreviewed", "--limit", "5", "--json"},
+			want: command{kind: "list", corpus: "corpus.jsonl", status: "approved", filter: "unreviewed", hasFilter: true, limit: 5, hasLimit: true, json: true},
+		},
+		{
+			name: "list with zero limit",
+			args: []string{"list", "corpus.jsonl", "--limit=0"},
+			want: command{kind: "list", corpus: "corpus.jsonl", status: "approved", hasLimit: true},
+		},
+		{
+			name: "show one record",
+			args: []string{"show", "corpus.jsonl", "id:note-001", "--json"},
+			want: command{kind: "show", corpus: "corpus.jsonl", ids: []string{"id:note-001"}, status: "approved", json: true},
+		},
+		{
+			name: "set several records",
+			args: []string{"set", "corpus.jsonl", "id:a", "id:b", "--status", "needs_review"},
+			want: command{kind: "set", corpus: "corpus.jsonl", ids: []string{"id:a", "id:b"}, status: "needs_review", hasStatus: true},
+		},
+		{
+			name: "flag accumulates comma-split and repeated add",
+			args: []string{"flag", "corpus.jsonl", "id:a", "--add", "pii, typo,,", "--add=tone", "--remove", " spam "},
+			want: command{kind: "flag", corpus: "corpus.jsonl", ids: []string{"id:a"}, status: "approved", add: []string{"pii", "typo", "tone"}, hasAdd: true, remove: []string{"spam"}, hasRemove: true},
+		},
+		{
+			name: "suggest with remove only",
+			args: []string{"suggest", "corpus.jsonl", "id:a", "id:b", "--remove", "dup", "--json", "--config", "q.yaml"},
+			want: command{kind: "suggest", corpus: "corpus.jsonl", ids: []string{"id:a", "id:b"}, status: "approved", remove: []string{"dup"}, hasRemove: true, json: true, configPath: "q.yaml", hasConfig: true},
+		},
+		{
+			name: "edit with text",
+			args: []string{"edit", "corpus.jsonl", "id:a", "--text", "-new text"},
+			want: command{kind: "edit", corpus: "corpus.jsonl", ids: []string{"id:a"}, status: "approved", text: "-new text", hasText: true},
+		},
+		{
+			name: "edit with text from stdin",
+			args: []string{"edit", "corpus.jsonl", "id:a", "--text-file", "-"},
+			want: command{kind: "edit", corpus: "corpus.jsonl", ids: []string{"id:a"}, status: "approved", textFile: "-", hasTextFile: true},
+		},
+		{
+			name: "edit revert",
+			args: []string{"edit", "corpus.jsonl", "id:a", "--revert"},
+			want: command{kind: "edit", corpus: "corpus.jsonl", ids: []string{"id:a"}, status: "approved", revert: true},
+		},
+		{
+			name: "undo",
+			args: []string{"undo", "corpus.jsonl", "--json"},
+			want: command{kind: "undo", corpus: "corpus.jsonl", status: "approved", json: true},
+		},
+		{
+			name: "stats json",
+			args: []string{"stats", "corpus.jsonl", "--json"},
+			want: command{kind: "stats", corpus: "corpus.jsonl", status: "approved", json: true},
+		},
+		{
+			name: "export to stdout",
+			args: []string{"export", "corpus.jsonl", "-o", "-"},
+			want: command{kind: "export", corpus: "corpus.jsonl", status: "approved", output: "-", hasOutput: true},
+		},
 	}
 
 	for _, tt := range tests {
@@ -110,7 +172,7 @@ func TestParseArgs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseArgs(%q): %v", tt.args, err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("parseArgs(%q)\n got %+v\nwant %+v", tt.args, got, tt.want)
 			}
 		})
@@ -144,6 +206,33 @@ func TestParseArgsErrors(t *testing.T) {
 		{name: "check with init", args: []string{"init", "--check"}, want: "--check is only valid with `quet update`"},
 		{name: "filter with update", args: []string{"update", "--filter", "x"}, want: "--filter is not valid with `quet update`"},
 		{name: "force with update", args: []string{"update", "--force"}, want: "--force is not valid with `quet update`"},
+		{name: "list without corpus", args: []string{"list"}, want: "missing corpus file"},
+		{name: "list with id", args: []string{"list", "corpus.jsonl", "id:a"}, want: `unexpected argument "id:a"`},
+		{name: "undo with id", args: []string{"undo", "corpus.jsonl", "id:a"}, want: `unexpected argument "id:a"`},
+		{name: "show without id", args: []string{"show", "corpus.jsonl"}, want: "`quet show` needs a record id"},
+		{name: "show with two ids", args: []string{"show", "corpus.jsonl", "id:a", "id:b"}, want: "takes exactly one record id"},
+		{name: "edit with two ids", args: []string{"edit", "corpus.jsonl", "id:a", "id:b", "--revert"}, want: "takes exactly one record id"},
+		{name: "set without id", args: []string{"set", "corpus.jsonl", "--status", "approved"}, want: "needs at least one record id"},
+		{name: "flag without id", args: []string{"flag", "corpus.jsonl", "--add", "pii"}, want: "needs at least one record id"},
+		{name: "suggest without id", args: []string{"suggest", "corpus.jsonl", "--add", "pii"}, want: "needs at least one record id"},
+		{name: "set without status", args: []string{"set", "corpus.jsonl", "id:a"}, want: "`quet set` needs --status"},
+		{name: "set with export preset", args: []string{"set", "corpus.jsonl", "id:a", "--status", "all"}, want: "unknown status"},
+		{name: "flag with nothing to do", args: []string{"flag", "corpus.jsonl", "id:a"}, want: "`quet flag` needs --add or --remove"},
+		{name: "suggest with only empty names", args: []string{"suggest", "corpus.jsonl", "id:a", "--add", " , "}, want: "`quet suggest` needs --add or --remove"},
+		{name: "edit with nothing", args: []string{"edit", "corpus.jsonl", "id:a"}, want: "needs exactly one of --text, --text-file or --revert"},
+		{name: "edit with text and revert", args: []string{"edit", "corpus.jsonl", "id:a", "--text", "x", "--revert"}, want: "needs exactly one of"},
+		{name: "edit with text and text-file", args: []string{"edit", "corpus.jsonl", "id:a", "--text", "x", "--text-file", "f"}, want: "needs exactly one of"},
+		{name: "negative limit", args: []string{"list", "corpus.jsonl", "--limit", "-1"}, want: "--limit needs a non-negative whole number"},
+		{name: "non-numeric limit", args: []string{"list", "corpus.jsonl", "--limit", "ten"}, want: "--limit needs a non-negative whole number"},
+		{name: "unknown list filter", args: []string{"list", "corpus.jsonl", "--filter", "bogus"}, want: "unknown filter"},
+		{name: "limit with show", args: []string{"show", "corpus.jsonl", "id:a", "--limit", "1"}, want: "--limit is not valid with `quet show`"},
+		{name: "add with set", args: []string{"set", "corpus.jsonl", "id:a", "--status", "approved", "--add", "x"}, want: "--add is not valid with `quet set`"},
+		{name: "status with flag", args: []string{"flag", "corpus.jsonl", "id:a", "--add", "x", "--status", "approved"}, want: "--status is not valid with `quet flag`"},
+		{name: "no-skip-reviewed with list", args: []string{"list", "corpus.jsonl", "--no-skip-reviewed"}, want: "--no-skip-reviewed is not valid with `quet list`"},
+		{name: "json when reviewing", args: []string{"corpus.jsonl", "--json"}, want: "--json is not valid when reviewing"},
+		{name: "json with init", args: []string{"init", "--json"}, want: "--json is not valid with `quet init`"},
+		{name: "json with export", args: []string{"export", "corpus.jsonl", "--json"}, want: "--json is not valid with `quet export`"},
+		{name: "revert with stats", args: []string{"stats", "corpus.jsonl", "--revert"}, want: "--revert is not valid with `quet stats`"},
 	}
 
 	for _, tt := range tests {
@@ -185,5 +274,24 @@ func TestStatusPreset(t *testing.T) {
 	}
 	if _, err := statusPreset("bogus"); err == nil {
 		t.Error("statusPreset(bogus): want error, got nil")
+	}
+}
+
+func TestReviewNeedsInteractiveTerminal(t *testing.T) {
+	saved := isInteractive
+	isInteractive = func() bool { return false }
+	t.Cleanup(func() { isInteractive = saved })
+
+	var stdout, stderr bytes.Buffer
+	code := runReview(command{kind: "review", corpus: "missing.jsonl"}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	want := "quet: the review screen needs an interactive terminal; use quet list/show/set/flag/suggest/edit for scripted review (see quet help)\n"
+	if stderr.String() != want {
+		t.Errorf("stderr %q, want %q", stderr.String(), want)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout %q, want nothing", stdout.String())
 	}
 }

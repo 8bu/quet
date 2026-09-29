@@ -3,6 +3,7 @@ package review
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -258,6 +259,13 @@ func (s *Session) Record(i int) *corpus.Record {
 		return nil
 	}
 	return &s.Corpus.Records[i]
+}
+
+// Index returns the corpus index of the record with id (as printed by quet list, e.g.
+// "id:note-001"); ok=false when no record has that ID.
+func (s *Session) Index(id string) (int, bool) {
+	i, ok := s.byID[id]
+	return i, ok
 }
 
 // State returns a copy of record i's review state; callers must not mutate session state.
@@ -518,6 +526,37 @@ func (s *Session) SetManualFlags(flags []string) error {
 	return s.persist(i, "flags", before, after)
 }
 
+// SuggestedFlags returns record i's effective suggested flags: the corpus-metadata
+// suggestions plus those added through the sidecar, sorted and unique (never nil).
+func (s *Session) SuggestedFlags(i int) []string {
+	if i < 0 || i >= len(s.Corpus.Records) {
+		return []string{}
+	}
+	names := append(append([]string(nil), s.Corpus.Records[i].SuggestedFlags...), s.states[i].SuggestedFlags...)
+	if out := cleanFlags(names); out != nil {
+		return out
+	}
+	return []string{}
+}
+
+// SetSuggestedFlags persists the sidecar-added suggested flags (sorted, unique) for the
+// current record. Names already in the record's corpus metadata are dropped, since they are
+// suggested regardless of the sidecar.
+func (s *Session) SetSuggestedFlags(flags []string) error {
+	i := s.Current()
+	if i < 0 {
+		return errNoCurrent
+	}
+	cleaned := withoutNames(cleanFlags(flags), s.Corpus.Records[i].SuggestedFlags)
+	before := s.states[i]
+	if equalStrings(before.SuggestedFlags, cleaned) {
+		return nil
+	}
+	after := before.Clone()
+	after.SuggestedFlags = cleaned
+	return s.persist(i, "suggest", before, after)
+}
+
 // Undo reverts the most recent persisted mutation (survives restarts), moves current to that record. ok=false if nothing to undo.
 func (s *Session) Undo() (ok bool, recordIndex int, err error) {
 	id, restored, ok, err := s.Store.Undo()
@@ -663,11 +702,12 @@ func (s *Session) DiagnosticFacets() []Facet {
 	return sortedFacets(counts)
 }
 
-// SuggestedFacets returns corpus-wide suggested flag counts, sorted by flag name.
+// SuggestedFacets returns corpus-wide suggested flag counts (corpus metadata and sidecar
+// suggestions), sorted by flag name.
 func (s *Session) SuggestedFacets() []Facet {
 	counts := make(map[string]int)
 	for i := range s.Corpus.Records {
-		for _, name := range s.Corpus.Records[i].SuggestedFlags {
+		for _, name := range s.SuggestedFlags(i) {
 			counts[name]++
 		}
 	}
@@ -717,7 +757,7 @@ func (s *Session) matches(i int, f Filter) bool {
 	case FilterManual:
 		return flagMatches(f.Value, st.ManualFlags)
 	case FilterSuggested:
-		return flagMatches(f.Value, rec.SuggestedFlags)
+		return flagMatches(f.Value, s.SuggestedFlags(i))
 	case FilterSource:
 		return rec.Source == f.Value
 	case FilterBatch:
@@ -773,9 +813,10 @@ func viewIndex(view []int, record int) int {
 // stateFromStorage converts persisted state to in-memory state, canonicalizing statuses.
 func stateFromStorage(rs storage.RecordState) State {
 	st := State{
-		EditedText:  rs.EditedText,
-		ManualFlags: rs.ManualFlags,
-		Annotations: rs.Annotations,
+		EditedText:     rs.EditedText,
+		ManualFlags:    rs.ManualFlags,
+		SuggestedFlags: rs.SuggestedFlags,
+		Annotations:    rs.Annotations,
 	}
 	if status, err := ParseStatus(rs.Status); err == nil {
 		st.Status = status
@@ -783,16 +824,20 @@ func stateFromStorage(rs storage.RecordState) State {
 	if len(st.ManualFlags) == 0 {
 		st.ManualFlags = nil
 	}
+	if len(st.SuggestedFlags) == 0 {
+		st.SuggestedFlags = nil
+	}
 	return st
 }
 
 // toStorage converts in-memory state to persisted state; the status is always written explicitly.
 func toStorage(st State) storage.RecordState {
 	return storage.RecordState{
-		Status:      string(st.EffectiveStatus()),
-		EditedText:  st.EditedText,
-		ManualFlags: st.ManualFlags,
-		Annotations: st.Annotations,
+		Status:         string(st.EffectiveStatus()),
+		EditedText:     st.EditedText,
+		ManualFlags:    st.ManualFlags,
+		SuggestedFlags: st.SuggestedFlags,
+		Annotations:    st.Annotations,
 	}
 }
 
@@ -819,6 +864,17 @@ func cleanFlags(flags []string) []string {
 		return nil
 	}
 	sort.Strings(out)
+	return out
+}
+
+// withoutNames returns names minus every entry of drop, preserving order; nil when empty.
+func withoutNames(names, drop []string) []string {
+	var out []string
+	for _, name := range names {
+		if !slices.Contains(drop, name) {
+			out = append(out, name)
+		}
+	}
 	return out
 }
 

@@ -1,13 +1,25 @@
 # Usage
 
 ```sh
-quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]  # review in the TUI (default)
-quet stats <corpus> [flags]                            # print review counts
-quet export <corpus> [flags]                           # write a reviewed corpus
-quet init [--global] [-f|--force]                      # write starter quet.yaml and flags.yaml
-quet update [--check]                                  # update to the latest release
-quet help                                              # help (also: quet --help, -h)
+quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]     # review in the TUI (default)
+quet list <corpus> [--filter f] [--limit N] [--json]       # list records
+quet show <corpus> <id> [--json]                           # print one record
+quet set <corpus> <id>... --status <status> [--json]       # set review status
+quet flag <corpus> <id>... [--add a,b] [--remove c]        # add/remove manual flags
+quet suggest <corpus> <id>... [--add a,b] [--remove c]     # add/remove suggested flags
+quet edit <corpus> <id> (--text s|--text-file f|--revert)  # replace or revert the text
+quet undo <corpus> [--json]                                # undo the last change
+quet stats <corpus> [--json]                               # print review counts
+quet export <corpus> [flags]                               # write a reviewed corpus
+quet init [--global] [-f|--force]                          # write starter quet.yaml and flags.yaml
+quet update [--check]                                      # update to the latest release
+quet help                                                  # help (also: quet --help, -h)
 ```
+
+`list`, `show`, `set`, `flag`, `suggest`, `edit` and `undo` review without the TUI, against the same
+sidecar and undo log; they are covered in [Scripting and agents](scripting.md). The review screen
+needs an interactive terminal: when standard input or output is not one, `quet [corpus|dir]` exits
+with status 1 and points you to those commands.
 
 The corpus argument and flags may come in any order, and `--flag value` and `--flag=value` are
 both accepted:
@@ -18,7 +30,8 @@ quet --filter unreviewed examples/corpus.jsonl
 quet --filter=unreviewed examples/corpus.jsonl
 ```
 
-Unknown flags and missing arguments print the usage on stderr and exit with status 2.
+Unknown flags and missing arguments print the usage on stderr and exit with status 2; runtime
+failures exit with status 1.
 
 ## Review flags
 
@@ -31,7 +44,9 @@ Unknown flags and missing arguments print the usage on stderr and exit with stat
 | `-h`, `--help` | Show help |
 | `--version` | Print the version |
 
-Export has its own flags; see [Export](export.md).
+Export has its own flags; see [Export](export.md). `--config` and `--flags-file` also apply to every
+other command that takes a corpus, and `--filter` to `list`; `--no-skip-reviewed` applies only to
+the review screen.
 
 ## Opening a file from the browser
 
@@ -83,6 +98,10 @@ Sidecar: examples/corpus.jsonl.quet.db
 
 Counts come from your corpus and your review progress. The `Diagnostics:` line lists only the
 [diagnostics](diagnostics.md) that fired at least once, and is omitted when none did.
+
+`quet stats <corpus> --json` prints the same counts as one JSON object, plus the manual flags
+defined in `flags.yaml` with their usage counts; see
+[Scripting and agents](scripting.md#stats-object).
 
 ## Update
 

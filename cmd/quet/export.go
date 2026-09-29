@@ -7,7 +7,8 @@ import (
 	"github.com/8bu/quet/internal/export"
 )
 
-// runExport writes the records selected by --status to --output (atomic write, never over the corpus).
+// runExport writes the records selected by --status to --output (atomic write, never over
+// the corpus), or streams them to stdout for `-o -` with the summary line on stderr.
 func runExport(cmd command, stdout, stderr io.Writer) int {
 	preset, err := statusPreset(cmd.status)
 	if err != nil {
@@ -26,6 +27,15 @@ func runExport(cmd command, stdout, stderr io.Writer) int {
 	opt.Format = cmd.format
 	if cmd.withReview {
 		opt.WithReview = true
+	}
+	if cmd.hasOutput && cmd.output == "-" {
+		written, err := export.Write(session, stdout, opt)
+		if err != nil {
+			fmt.Fprintf(stderr, "quet: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stderr, "Wrote %d records to stdout\n", written)
+		return 0
 	}
 	out := cmd.output
 	if !cmd.hasOutput {

@@ -29,21 +29,31 @@ Wrote 21 records to reviewed.jsonl
 
 The printed count is the number of records actually written.
 
+With `-o -` the export goes to standard output instead of a file, and the `Wrote N records` line
+goes to standard error, so the output can be piped straight into another program:
+
+```sh
+quet export examples/corpus.jsonl -o - | wc -l
+quet export examples/corpus.jsonl --status all -o - | jq -c '.quet | {id, status}'
+quet export examples/corpus.jsonl --format txt -o - > approved.txt
+```
+
 ## Flags
 
 | Export flag | Meaning |
 | --- | --- |
 | `--status <name>` | `approved` (default), `rejected`, `needs_review` (also `needs-review`), `all` |
-| `-o`, `--output <path>` | Output file; defaults to `<corpus-without-extension><preset suffix>` next to the corpus, with `-1`, `-2`, … appended if that name is taken |
+| `-o`, `--output <path>` | Output file; defaults to `<corpus-without-extension><preset suffix>` next to the corpus, with `-1`, `-2`, … appended if that name is taken. `-` writes to standard output |
 | `--with-review` | Add the `quet` review-metadata object to any preset |
 | `--format <name>` | `jsonl` (default) or `txt` (final text, one record per line) |
 | `-f`, `--force` | Overwrite an existing output file |
 
 ## Safety
 
-Exports are atomic: Quet streams into a temporary file in the target directory, fsyncs, and renames
-it over the target. It refuses to write over the source corpus or its sidecar database, and refuses
-to overwrite an existing file unless you pass `-f`. Nothing ever writes into the source corpus.
+File exports are atomic: Quet streams into a temporary file in the target directory, fsyncs, and
+renames it over the target. It refuses to write over the source corpus or its sidecar database, and
+refuses to overwrite an existing file unless you pass `-f`. Nothing ever writes into the source
+corpus. `-o -` writes to standard output, so none of the file checks apply there.
 
 ## Review metadata
 
@@ -53,5 +63,7 @@ With `--with-review` each JSONL line keeps its imported metadata and gains one `
 {"id": "note-001", "text": "bắn thg Nam 2 củ tiền hôm nọ", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-02T01:00:00Z", "suggested_flags": ["slang"], "lang": "vi", "quet": {"id": "id:note-001", "status": "approved", "edited": false, "manual_flags": [], "suggested_flags": ["slang"]}}
 ```
 
-`original_text` appears inside `quet` only for records you edited. [Diagnostics](diagnostics.md)
-are informational only and are never exported.
+`original_text` appears inside `quet` only for records you edited. `suggested_flags` inside `quet`
+is the corpus-metadata suggestions merged with any added with
+[`quet suggest`](scripting.md#suggest). [Diagnostics](diagnostics.md) are informational only and
+are never exported.
