@@ -14,11 +14,17 @@ and no telemetry, and the source file is never modified.
 
 ## Install
 
-Requires Go 1.26+. From a checkout of this repository:
+macOS and Linux, arm64 and x86_64:
 
 ```sh
-make install          # puts quet in $GOPATH/bin
+curl -fsSL https://raw.githubusercontent.com/8bu/quet/main/install.sh | sh
 ```
+
+The script downloads the latest release binary, verifies it against the release's `SHA256SUMS`, and
+installs it to `/usr/local/bin` (or `~/.local/bin` when that isn't writable). Re-run it to upgrade;
+set `QUET_VERSION=0.2.0` to pin a version or `QUET_INSTALL_DIR` to choose where it goes.
+
+From source, with Go 1.26+: `make install` in a checkout puts `quet` in `$GOPATH/bin`.
 
 ## Quickstart
 
