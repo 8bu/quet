@@ -32,7 +32,6 @@ examples/                small example corpora in all three formats
 docs/                    user documentation
 install.sh               curl | sh installer, attached to every release
 .github/workflows/       CI, release-please, and the publish workflow
-.github/scripts/         Homebrew formula generator
 release-please-config.json, .release-please-manifest.json   release-please settings and current version
 ```
 
@@ -64,19 +63,16 @@ tags by hand.
 3. Merging that PR tags `vx.y.z` and creates the GitHub Release. The same run then calls
    `.github/workflows/publish.yml`, which checks out the tag, runs `make check` and `make release`,
    confirms the binary reports the right version, and attaches `quet_<os>_<arch>`, `SHA256SUMS`
-   and `install.sh` to the release. If `HOMEBREW_TAP_TOKEN` is set, it also rewrites
-   `Formula/quet.rb` in `8bu/homebrew-tap` from `.github/scripts/homebrew-formula.sh`.
+   and `install.sh` to the release.
 
 To re-publish a tag, run the Publish workflow by hand from the Actions tab with that tag. Uploads use
 `--clobber`, so re-running replaces the assets. It builds from the tagged tree, so it only works for
-tags that contain `install.sh` and `.github/scripts/` — 0.2.0 onwards, not `v0.1.0`.
+tags that contain `install.sh` — 0.2.0 onwards, not `v0.1.0`.
 
 One-time repository setup:
 
 - Settings → Actions → General → enable "Allow GitHub Actions to create and approve pull requests",
   so release-please can open the Release PR.
-- Secret `HOMEBREW_TAP_TOKEN`: a fine-grained token with Contents read/write on `8bu/homebrew-tap`
-  only. Until it exists, publishing skips the Homebrew step with a notice.
 
 Version metadata is injected at link time from `internal/version`, so a build made inside a checkout
 reports the tag or revision it came from:

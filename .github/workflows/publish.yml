@@ -1,9 +1,8 @@
-# Publishes a release tag: builds the binaries, attaches them to the GitHub
-# Release, and points the Homebrew tap at them. It lives in its own workflow
-# file because two things reach it: release.yml calls it (workflow_call) with
-# the tag release-please just cut, and a maintainer dispatches it by hand to
-# re-publish a tag. The tag's own tree must contain install.sh and
-# .github/scripts/, which rules out v0.1.0.
+# Publishes a release tag: builds the binaries and attaches them to the GitHub
+# Release. It lives in its own workflow file because two things reach it:
+# release.yml calls it (workflow_call) with the tag release-please just cut,
+# and a maintainer dispatches it by hand to re-publish a tag. The tag's own
+# tree must contain install.sh, which rules out v0.1.0.
 #
 # - checks out the tag and re-runs the checks there, so a release is built from
 #   the exact tree that was tagged, never from a moving branch.
@@ -12,12 +11,9 @@
 #   newest release — that is the URL install.sh and the docs use.
 # - `--clobber` makes re-running safe: the assets are replaced, not duplicated.
 #   A dispatched tag with no GitHub Release yet gets one created first.
-# - the Homebrew step is skipped (with a notice) until HOMEBREW_TAP_TOKEN is
-#   set, so the pipeline works before the tap exists.
 # - one publish per tag at a time, never cancelled mid-upload.
 #
-# Repo secret (optional until Homebrew ships): HOMEBREW_TAP_TOKEN — a
-# fine-grained token with Contents: read and write on the tap repository only.
+# One-time setup: none beyond release.yml's — GITHUB_TOKEN uploads the assets.
 name: Publish
 
 on:
@@ -30,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish or re-publish, for example v0.1.0
+        description: Release tag to re-publish, for example v0.2.0
         required: true
         type: string
 
@@ -40,9 +36,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  TAP_REPO: 8bu/homebrew-tap
 
 jobs:
   publish:
@@ -97,28 +90,3 @@ jobs:
             gh release create "$TAG" --verify-tag --title "$TAG" --notes "See CHANGELOG.md for what changed."
           fi
           gh release upload "$TAG" dist/quet_* dist/SHA256SUMS install.sh --clobber
-
-      - name: Update Homebrew tap
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ inputs.tag }}
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: |
-          if [ -z "$TAP_TOKEN" ]; then
-            echo "::notice::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew tap update"
-            exit 0
-          fi
-          base="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}"
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
-          mkdir -p tap/Formula
-          .github/scripts/homebrew-formula.sh "$VERSION" "$base" dist/SHA256SUMS > tap/Formula/quet.rb
-          cd tap
-          git add Formula/quet.rb
-          if git diff --cached --quiet; then
-            echo "Formula already at $VERSION"
-            exit 0
-          fi
-          git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit -m "quet ${VERSION}"
-          git push origin HEAD

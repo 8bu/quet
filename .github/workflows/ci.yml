@@ -41,7 +41,7 @@ jobs:
           go-version-file: go.mod
       - run: make fmt
       - run: make vet
-      - run: shellcheck install.sh .github/scripts/*.sh
+      - run: shellcheck install.sh
       - run: make race
       - run: make release
       - uses: actions/upload-artifact@v4
