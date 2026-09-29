@@ -13,3 +13,9 @@
 {"id": "note-013", "text": "cho vay nóng 5 lít, hẹn mai trả", "source": "claude", "batch": "slang-loan-03", "created_at": "2026-01-05T03:00:00Z", "suggested_flags": ["slang"], "lang": "vi"}
 {"id": "note-014", "text": "💰💸🙏 thanks bro 500000", "source": "qwen", "batch": "weird-01", "created_at": "2026-01-06T04:00:00Z", "suggested_flags": ["weird_symbols"], "lang": "vi"}
 {"id": "note-015", "text": "Hùng mượn 1.5tr mua đồ ăn cho mèo, chưa trả", "source": "claude", "batch": "family-loan-02", "created_at": "2026-01-07T05:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-016", "text": "cho Tuấn vay 4tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-08T06:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-017", "text": "cho Lan vay 6tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-09T07:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-018", "text": "cho An vay 8tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-10T08:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-019", "text": "cho Bình vay 2tr", "source": "qwen", "batch": "template-loan-01", "created_at": "2026-01-11T09:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-020", "text": "hôm nay mình mượn của chị Hoa một khoản tiền để đóng tiền học cho con, chị bảo cứ từ từ trả cũng được, nhưng mình vẫn muốn ghi lại cho rõ ràng là 3tr5 và hẹn cuối tháng này sẽ trả đủ, cảm ơn chị nhiều", "source": "claude", "batch": "family-loan-02", "created_at": "2026-01-12T10:00:00Z", "suggested_flags": [], "lang": "vi"}
+{"id": "note-021", "text": "ghi chú chi tiêu tuần này, chưa nhớ rõ số tiền cụ thể", "source": "claude", "batch": "budget-notes", "created_at": "2026-01-13T11:00:00Z", "suggested_flags": [], "lang": "vi"}

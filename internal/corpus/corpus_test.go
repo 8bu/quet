@@ -332,7 +332,7 @@ func TestLoadExamplesUnmodified(t *testing.T) {
 		records    int
 		wantSource string
 	}{
-		{"../../examples/corpus.jsonl", "jsonl", 15, "claude"},
+		{"../../examples/corpus.jsonl", "jsonl", 21, "claude"},
 		{"../../examples/corpus.json", "json", 5, "claude"},
 		{"../../examples/corpus.txt", "txt", 14, ""},
 	}

@@ -22,6 +22,10 @@ go build -o quet ./cmd/quet
 `w` to approve, `s` to reject, `space` for needs review. Progress is saved as you go, so `q` quits
 and you can open the same corpus again later to pick up where you left off.
 
+`examples/corpus.jsonl` holds 21 short Vietnamese finance notes that deliberately trip all seven
+auto checks — `duplicate`, `too_long`, `empty`, `repeated_chars`, `weird_symbols`, `missing_amount`
+and `possible_template` — so you can see every warning before pointing Quet at your own data.
+
 ## Installation
 
 Requires Go 1.26+.
@@ -268,7 +272,7 @@ metadata — no reviewer internals. `clean` is the training-corpus preset and ha
 
 ```
 $ ./quet export examples/corpus.jsonl --status all -o reviewed.jsonl
-Wrote 15 records to reviewed.jsonl
+Wrote 21 records to reviewed.jsonl
 ```
 
 The printed count is the number of records actually written.
@@ -297,13 +301,13 @@ With `--with-review` each JSONL line keeps its imported metadata and gains one `
 
 ```sh
 $ ./quet stats examples/corpus.jsonl
-Total:            15
+Total:            21
 Approved:          0
 Rejected:          0
 Needs review:      0
-Unreviewed:       15
+Unreviewed:       21
 Edited:            0
-Auto flags: duplicate 2, empty 1, repeated_chars 1, weird_symbols 1
+Auto flags: duplicate 2, too_long 1, empty 1, repeated_chars 1, weird_symbols 1, missing_amount 1, possible_template 8
 Corpus: examples/corpus.jsonl
 Sidecar: examples/corpus.jsonl.quet.db
 ```
