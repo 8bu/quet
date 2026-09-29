@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README is now a short introduction; the full documentation lives in `docs/`.
 - The record panel now shrinks to fit the record's text, so the details panel sits directly
   below it instead of at the bottom of the screen. It still grows up to 70% of the column for
   long records, and edit mode keeps the full height.
