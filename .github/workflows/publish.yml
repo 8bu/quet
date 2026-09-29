@@ -2,7 +2,8 @@
 # Release, and points the Homebrew tap at them. It lives in its own workflow
 # file because two things reach it: release.yml calls it (workflow_call) with
 # the tag release-please just cut, and a maintainer dispatches it by hand to
-# re-publish a tag or backfill one that predates this workflow.
+# re-publish a tag. The tag's own tree must contain install.sh and
+# .github/scripts/, which rules out v0.1.0.
 #
 # - checks out the tag and re-runs the checks there, so a release is built from
 #   the exact tree that was tagged, never from a moving branch.

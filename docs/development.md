@@ -67,8 +67,9 @@ tags by hand.
    and `install.sh` to the release. If `HOMEBREW_TAP_TOKEN` is set, it also rewrites
    `Formula/quet.rb` in `8bu/homebrew-tap` from `.github/scripts/homebrew-formula.sh`.
 
-To re-publish a tag (or publish one that predates the workflow), run the Publish workflow by hand
-from the Actions tab with that tag. Uploads use `--clobber`, so re-running replaces the assets.
+To re-publish a tag, run the Publish workflow by hand from the Actions tab with that tag. Uploads use
+`--clobber`, so re-running replaces the assets. It builds from the tagged tree, so it only works for
+tags that contain `install.sh` and `.github/scripts/` — 0.2.0 onwards, not `v0.1.0`.
 
 One-time repository setup:
 
