@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   below it instead of at the bottom of the screen. It still grows up to 70% of the column for
   long records, and edit mode keeps the full height.
 
+### Fixed
+
+- Review actions no longer silently stay on the same record when no unreviewed record is left
+  ahead. Quet now wraps to the first unreviewed record you skipped past, or, once everything is
+  reviewed, steps to the next record. Re-pressing a record's existing status also moves on.
+
 ## [0.1.0] - 2026-09-29
 
 First release.

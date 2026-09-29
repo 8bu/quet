@@ -135,9 +135,12 @@ A record has exactly one status:
 | `needs_review` | `space` |
 
 After `w`, `s` or `space` the status is persisted immediately, a small confirmation shows, and the
-TUI auto-advances to the next unresolved record (skipping reviewed records, `skip_reviewed: true` by
-default; use `--no-skip-reviewed` to visit every record). A reviewed record can be reopened and
-changed at any time.
+TUI auto-advances to the next unreviewed record (`skip_reviewed: true` by default; use
+`--no-skip-reviewed` to visit every record). When nothing unreviewed is left ahead it wraps back to
+the first unreviewed record you skipped past; once everything in view is reviewed it simply steps
+to the next record, so a second pass keeps moving. The status line says `wrapped to first
+unreviewed` or `all reviewed` when that happens. Pressing the status a record already has (say `w`
+on an approved record) confirms it and moves on without writing an undo entry.
 
 Every change is written straight to the SQLite sidecar `<corpus>.quet.db` (created next to the
 corpus), so `q` at any moment is safe and reopening the corpus restores the review session. `z`

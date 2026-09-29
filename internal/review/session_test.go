@@ -171,8 +171,36 @@ func TestSkipReviewedControlsAdvance(t *testing.T) {
 	if got := s.Current(); got != 3 {
 		t.Fatalf("Current = %d, want 3 (skipping reviewed n2)", got)
 	}
+	// Nothing unreviewed ahead: wrap back to the skipped n1.
+	if advanced, err := s.SetStatus(Approved); err != nil || !advanced {
+		t.Fatalf("SetStatus at end = (%v, %v), want wrap", advanced, err)
+	}
+	if got := s.Current(); got != 1 {
+		t.Fatalf("Current = %d, want 1 (wrapped to first unreviewed)", got)
+	}
+	// Everything reviewed: a revision pass steps record by record.
+	if advanced, err := s.SetStatus(Rejected); err != nil || !advanced {
+		t.Fatalf("SetStatus last unreviewed = (%v, %v), want advance", advanced, err)
+	}
+	if got := s.Current(); got != 2 {
+		t.Fatalf("Current = %d, want 2 (plain next once all reviewed)", got)
+	}
+	// Re-applying the existing status confirms it: no event, but it moves on.
+	events, err := s.Store.CountEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advanced, err := s.SetStatus(NeedsReview); err != nil || !advanced {
+		t.Fatalf("confirm existing status = (%v, %v), want advance", advanced, err)
+	}
+	if got := s.Current(); got != 3 {
+		t.Fatalf("Current = %d, want 3", got)
+	}
+	if after, _ := s.Store.CountEvents(); after != events {
+		t.Fatalf("confirming existing status wrote %d event(s)", after-events)
+	}
 	if advanced, err := s.SetStatus(Approved); err != nil || advanced {
-		t.Fatalf("SetStatus at end = (%v, %v), want no advance", advanced, err)
+		t.Fatalf("SetStatus on last record, all reviewed = (%v, %v), want stay", advanced, err)
 	}
 
 	// skip_reviewed=false advances one record at a time, reviewed or not.

@@ -192,14 +192,22 @@ func (m model) applyStatus(st review.ReviewStatus, label string) (model, tea.Cmd
 	if m.sess.Current() < 0 {
 		return m.setStatus("No records")
 	}
+	before, _ := m.sess.Position()
 	if _, err := m.sess.SetStatus(st); err != nil {
 		return m.setStatus("Error: %v", err)
 	}
 	m.refreshFacets()
-	if pos, n := m.sess.Position(); n > 0 {
-		return m.setStatus("%s  %d/%d", label, pos+1, n)
+	pos, n := m.sess.Position()
+	if n == 0 {
+		return m.setStatus("%s", label)
 	}
-	return m.setStatus("%s", label)
+	switch {
+	case m.sess.Counts().Unreviewed == 0:
+		return m.setStatus("%s  %d/%d  all reviewed", label, pos+1, n)
+	case pos < before:
+		return m.setStatus("%s  %d/%d  wrapped to first unreviewed", label, pos+1, n)
+	}
+	return m.setStatus("%s  %d/%d", label, pos+1, n)
 }
 
 // applyFacet applies the filter row highlighted in the corpus panel.

@@ -377,7 +377,11 @@ func (s *Session) Last() {
 	}
 }
 
-// NextUnresolved advances to next Unreviewed record in view after current (when SkipReviewed), else plain Next. Returns false if none (stays).
+// NextUnresolved moves after a review action. With SkipReviewed it goes to the
+// next Unreviewed record after the cursor, then wraps to the first Unreviewed
+// record before it; once the view has none left it steps to the next record so
+// a revision pass keeps moving. Without SkipReviewed it is plain Next. Returns
+// false if it stayed put.
 func (s *Session) NextUnresolved() bool {
 	if !s.SkipReviewed {
 		return s.Next()
@@ -388,11 +392,19 @@ func (s *Session) NextUnresolved() bool {
 			return true
 		}
 	}
-	return false
+	for p := range s.pos {
+		if s.states[s.view[p]].EffectiveStatus() == Unreviewed {
+			s.pos = p
+			return true
+		}
+	}
+	return s.Next()
 }
 
-// SetStatus persists status for current record then (for Approved/Rejected/NeedsReview) auto-advances via NextUnresolved.
-// Returns whether it advanced.
+// SetStatus persists status for the current record, then (for Approved,
+// Rejected and NeedsReview) auto-advances via NextUnresolved. Re-applying the
+// status a record already has writes no event but still advances, so a
+// revision pass can confirm and move on. Returns whether it advanced.
 func (s *Session) SetStatus(st ReviewStatus) (bool, error) {
 	i := s.Current()
 	if i < 0 {
@@ -405,7 +417,10 @@ func (s *Session) SetStatus(st ReviewStatus) (bool, error) {
 	}
 	before := s.states[i]
 	if before.EffectiveStatus() == st {
-		return false, nil
+		if st == Unreviewed {
+			return false, nil
+		}
+		return s.NextUnresolved(), nil
 	}
 	after := before.Clone()
 	after.Status = st
