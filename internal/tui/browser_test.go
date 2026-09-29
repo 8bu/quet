@@ -90,7 +90,7 @@ func press(t *testing.T, m tea.Model, keys ...tea.KeyMsg) tea.Model {
 
 func TestBrowserNavigation(t *testing.T) {
 	root := browserTree(t)
-	b, err := newBrowser(root, func(string) (*review.Session, error) { return nil, errors.New("unused") })
+	b, err := newBrowser(root, func(string) (*review.Session, error) { return nil, errors.New("unused") }, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestBrowserGateFailureStaysInBrowser(t *testing.T) {
 	b, err := newBrowser(root, func(path string) (*review.Session, error) {
 		opened = append(opened, path)
 		return nil, errors.New("no record has text")
-	})
+	}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestBrowserOpensIntoReview(t *testing.T) {
 	path := copyCorpus(t)
 	b, err := newBrowser(filepath.Dir(path), func(p string) (*review.Session, error) {
 		return review.Open(p, testConfig(), testFlagDefs())
-	})
+	}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestBrowserViewFitsTerminal(t *testing.T) {
 	long := strings.Repeat("malformed JSON on line 2 ", 20)
 	for _, size := range []struct{ w, h int }{{1, 1}, {20, 5}, {40, 10}, {120, 40}} {
 		for _, status := range []string{"", long} {
-			b, err := newBrowser(root, nil)
+			b, err := newBrowser(root, nil, Options{})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -48,6 +48,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStats(cmd, stdout, stderr)
 	case "export":
 		return runExport(cmd, stdout, stderr)
+	case "init":
+		return runInit(cmd, stdout, stderr)
 	default:
 		return runReview(cmd, stdout, stderr)
 	}
@@ -72,11 +74,17 @@ func runReview(cmd command, stdout, stderr io.Writer) int {
 
 	// tui.Run restores the terminal (leaves the alt screen, shows the cursor)
 	// before returning, including when it returns an error.
-	if err := tui.Run(session, tui.Options{}); err != nil {
+	if err := tui.Run(session, reviewOptions(cmd)); err != nil {
 		fmt.Fprintf(stderr, "quet: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// reviewOptions lets the TUI re-read the configuration and flags the same way
+// the command line loaded them, so edits and reloads honour --config and --flags-file.
+func reviewOptions(cmd command) tui.Options {
+	return tui.Options{Settings: func(p string) (config.Settings, error) { return loadSettings(cmd, p) }}
 }
 
 // browseDir reports the directory to browse: the working directory when no
@@ -101,7 +109,7 @@ func runBrowse(cmd command, dir string, stderr io.Writer) int {
 		}
 		return openPicked(cmd, path)
 	}
-	session, err := tui.Browse(dir, open, tui.Options{})
+	session, err := tui.Browse(dir, open, reviewOptions(cmd))
 	if session != nil {
 		defer session.Close()
 	}
@@ -122,14 +130,15 @@ func openPicked(cmd command, path string) (*review.Session, error) {
 	if err := c.Usable(); err != nil {
 		return nil, err
 	}
-	cfg, flags, err := loadSettings(cmd, path)
+	set, err := loadSettings(cmd, path)
 	if err != nil {
 		return nil, err
 	}
-	session, err := review.OpenCorpus(c, cfg, flags)
+	session, err := review.OpenCorpus(c, set.Config, set.Flags)
 	if err != nil {
 		return nil, err
 	}
+	session.FlagsPath = set.FlagsPath
 	if err := applyReviewOptions(cmd, session); err != nil {
 		session.Close()
 		return nil, err
@@ -156,25 +165,30 @@ func applyReviewOptions(cmd command, session *review.Session) error {
 
 // openSession loads the configuration, manual flags and the review session for cmd.corpus.
 func openSession(cmd command) (*review.Session, error) {
-	cfg, flags, err := loadSettings(cmd, cmd.corpus)
+	set, err := loadSettings(cmd, cmd.corpus)
 	if err != nil {
 		return nil, err
 	}
-	return review.Open(cmd.corpus, cfg, flags)
+	session, err := review.Open(cmd.corpus, set.Config, set.Flags)
+	if err != nil {
+		return nil, err
+	}
+	session.FlagsPath = set.FlagsPath
+	return session, nil
 }
 
 // loadSettings loads the configuration and the manual flag taxonomy for corpusPath.
-func loadSettings(cmd command, corpusPath string) (config.Config, []config.FlagDef, error) {
+func loadSettings(cmd command, corpusPath string) (config.Settings, error) {
 	cfg, err := loadConfig(cmd)
 	if err != nil {
-		return cfg, nil, err
+		return config.Settings{Config: cfg}, err
 	}
-	flagsPath := cmd.flagsFile
+	set := config.Settings{Config: cfg, FlagsPath: cmd.flagsFile}
 	if !cmd.hasFlagsFile {
-		flagsPath = config.ResolveFlagsFile(cfg, corpusPath)
+		set.FlagsPath = config.ResolveFlagsFile(cfg, corpusPath)
 	}
-	flags, err := config.LoadFlags(flagsPath)
-	return cfg, flags, err
+	set.Flags, err = config.LoadFlags(set.FlagsPath)
+	return set, err
 }
 
 // loadConfig reads the --config file when given (missing keys keep defaults), else

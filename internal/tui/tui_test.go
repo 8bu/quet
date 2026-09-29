@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +64,7 @@ func openSession(t *testing.T, path string) *review.Session {
 // fixture corpus, sized like a normal terminal.
 func testModel(t *testing.T) model {
 	t.Helper()
-	m := newModel(openSession(t, copyCorpus(t)))
+	m := newModel(openSession(t, copyCorpus(t)), Options{})
 	next, _ := m.update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	return next
 }
@@ -425,7 +426,7 @@ func TestEmptyCorpus(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("write empty corpus: %v", err)
 	}
-	m := newModel(openSession(t, path))
+	m := newModel(openSession(t, path), Options{})
 	next, _ := m.update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = next
 
@@ -440,5 +441,131 @@ func TestEmptyCorpus(t *testing.T) {
 	}
 	if next, _ := m.update(runeKey('e')); next.mode != ModeReview {
 		t.Error("e must not enter edit mode with no records")
+	}
+}
+
+// configModel returns a sized model over a temp copy of the fixture corpus
+// opened with cfg and flags.
+func configModel(t *testing.T, cfg config.Config, flags []config.FlagDef, opt Options) model {
+	t.Helper()
+	s, err := review.Open(copyCorpus(t), cfg, flags)
+	if err != nil {
+		t.Fatalf("review.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	next, _ := newModel(s, opt).update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return next
+}
+
+// fileSettings loads flagsPath when it exists, like the CLI's settings loader.
+func fileSettings(cfg config.Config, flagsPath string) func(string) (config.Settings, error) {
+	return func(string) (config.Settings, error) {
+		set := config.Settings{Config: cfg}
+		if _, err := os.Stat(flagsPath); err != nil {
+			return set, nil
+		}
+		flags, err := config.LoadFlags(flagsPath)
+		set.FlagsPath, set.Flags = flagsPath, flags
+		return set, err
+	}
+}
+
+func TestCreateFlagsPrompt(t *testing.T) {
+	flagsPath := filepath.Join(t.TempDir(), "conf", "flags.yaml")
+	cfg := testConfig()
+	cfg.FlagsFile = flagsPath
+	opt := Options{Settings: fileSettings(cfg, flagsPath)}
+
+	m := configModel(t, cfg, nil, opt)
+	if m.status != noFlagsHint {
+		t.Errorf("startup status = %q, want %q", m.status, noFlagsHint)
+	}
+
+	for _, cancel := range []tea.KeyMsg{runeKey('n'), specialKey(tea.KeyEsc)} {
+		next, _ := m.update(runeKey('f'))
+		if next.mode != ModeCreateFlags {
+			t.Fatalf("mode = %s, want %s", next.mode, ModeCreateFlags)
+		}
+		if next.createPath != flagsPath {
+			t.Errorf("offered path = %q, want %q", next.createPath, flagsPath)
+		}
+		next, _ = next.update(cancel)
+		if next.mode != ModeReview {
+			t.Errorf("%s: mode = %s, want review", cancel, next.mode)
+		}
+		if _, err := os.Stat(flagsPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s created the flags file (stat err %v)", cancel, err)
+		}
+	}
+
+	next, _ := send(m, runeKey('f'), runeKey('y'))
+	if _, err := os.Stat(flagsPath); err != nil {
+		t.Fatalf("flags file not created: %v", err)
+	}
+	if len(next.sess.FlagDefs) != 5 {
+		t.Errorf("flag defs = %d, want the 5 starter flags", len(next.sess.FlagDefs))
+	}
+	if next.sess.FlagsPath != flagsPath {
+		t.Errorf("session flags path = %q, want %q", next.sess.FlagsPath, flagsPath)
+	}
+	if next.mode != ModeFlags {
+		t.Errorf("mode = %s, want flags picker", next.mode)
+	}
+	if want := "Created " + flagsPath; next.status != want {
+		t.Errorf("status = %q, want %q", next.status, want)
+	}
+}
+
+func TestEditorDoneReloadsSettings(t *testing.T) {
+	fresh := []config.FlagDef{{Name: "fresh", Description: "Added in the editor."}}
+	var loadErr error
+	opt := Options{Settings: func(string) (config.Settings, error) {
+		if loadErr != nil {
+			return config.Settings{}, loadErr
+		}
+		return config.Settings{Config: testConfig(), FlagsPath: "flags.yaml", Flags: fresh}, nil
+	}}
+	m := configModel(t, testConfig(), testFlagDefs(), opt)
+
+	loadErr = errors.New("bad yaml")
+	next, _ := m.update(editorDoneMsg{path: "flags.yaml"})
+	if len(next.sess.FlagDefs) != len(testFlagDefs()) {
+		t.Errorf("flag defs = %v, want the old ones kept", next.sess.FlagDefs)
+	}
+	if !strings.Contains(next.status, "bad yaml") {
+		t.Errorf("status = %q, want the load error", next.status)
+	}
+
+	next, _ = next.update(editorDoneMsg{path: "flags.yaml", err: errors.New("exit status 1")})
+	if !strings.Contains(next.status, "Editor failed") {
+		t.Errorf("status = %q, want the editor failure", next.status)
+	}
+
+	loadErr = nil
+	next, _ = next.update(editorDoneMsg{path: "flags.yaml"})
+	if len(next.sess.FlagDefs) != 1 || next.sess.FlagDefs[0].Name != "fresh" {
+		t.Errorf("flag defs = %v, want the reloaded ones", next.sess.FlagDefs)
+	}
+	if want := "Reloaded config (1 flags)"; next.status != want {
+		t.Errorf("status = %q, want %q", next.status, want)
+	}
+}
+
+func TestConfigEditingUnavailableWithoutSettings(t *testing.T) {
+	m := testModel(t)
+	if m.status != "" {
+		t.Errorf("startup status = %q, want none without config support", m.status)
+	}
+	next, _ := m.update(runeKey('c'))
+	if next.status != "Config editing unavailable" {
+		t.Errorf("status = %q, want the unavailable notice", next.status)
+	}
+	if next.mode != ModeReview {
+		t.Errorf("mode = %s, want review", next.mode)
+	}
+
+	next = runPaletteCommand(t, m, "Reload config")
+	if next.status != "Config editing unavailable" {
+		t.Errorf("reload status = %q, want the unavailable notice", next.status)
 	}
 }

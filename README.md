@@ -42,15 +42,18 @@ When you're done:
 quet export examples/corpus.jsonl    # writes examples/corpus.approved.jsonl
 ```
 
+To customise checks and manual flags, `quet init` writes a starter `quet.yaml` and `flags.yaml`
+(`c` in the TUI edits the config and reloads it).
+
 ## Documentation
 
 | | |
 | --- | --- |
-| [Usage](docs/usage.md) | Command line, file browser, `stats` |
-| [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags |
+| [Usage](docs/usage.md) | Command line, file browser, `init`, `stats` |
+| [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
 | [Auto checks](docs/checks.md) | The seven warnings Quet computes and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |
-| [Configuration](docs/configuration.md) | `quet.yaml` and `flags.yaml` |
+| [Configuration](docs/configuration.md) | `quet.yaml`, `flags.yaml` and `quet init` |
 | [Export](docs/export.md) | Presets, output files, review metadata |
 | [Development](docs/development.md) | Building, testing, layout, releasing |
 

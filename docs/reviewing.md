@@ -45,6 +45,7 @@ what you review and export.
 | `esc` | Cancel the edit, close a picker, go back |
 | `enter` | Select / apply |
 | `f` | Manual flag picker (`j`/`k` move, `space` toggle, `enter` apply, `esc` close) |
+| `c` | Edit the config file in `$VISUAL`/`$EDITOR` and reload it |
 | `/` | Search text, original text and metadata; results in a selectable panel |
 | `tab` / `shift+tab` | Change panel |
 | `1` `2` `3` | Jump to panel: corpus/status, record, details |
@@ -87,4 +88,20 @@ manual:
 ```
 
 Press `f` to tick manual flags; the picker shows each flag's description from `flags.yaml`. Where
-Quet looks for that file is described in [Configuration](configuration.md).
+Quet looks for that file is described in [Configuration](configuration.md). When no flags file is
+found, the status line says so and `f` offers to create a starter one — at `flags_file` if the
+config sets it, else `./flags.yaml`.
+
+## Editing config
+
+| Key / palette command | Action |
+| --- | --- |
+| `c`, `Edit config file` | Open the config file in the editor; creates `./quet.yaml` from the starter when no config was loaded |
+| `Edit flags file` | Same for the flags file |
+| `Reload config` | Reload config and flags without opening the editor |
+
+The editor is `$VISUAL`, else `$EDITOR`, else `vi`; arguments are allowed (`EDITOR="code -w"`).
+When it exits, the settings are reloaded into the open session: new manual flags show up in the
+picker, check thresholds apply and auto flags are recomputed, and `skip_reviewed` changes only if
+its value in the file changed (so `--no-skip-reviewed` survives an unrelated edit). If the config
+has an error, the previous settings stay in effect and the error is shown in the status line.

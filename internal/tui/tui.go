@@ -4,16 +4,20 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/8bu/quet/internal/config"
 	"github.com/8bu/quet/internal/review"
 )
 
-// Options for Run. The set is currently empty; it exists so callers can keep
-// passing it while options are added.
-type Options struct{}
+// Options for Run and Browse.
+type Options struct {
+	// Settings re-reads the config and flags that apply to the corpus at
+	// corpusPath. Nil disables in-app config creation, editing and reload.
+	Settings func(corpusPath string) (config.Settings, error)
+}
 
 // Run starts the full-screen TUI (alt screen) and blocks until quit.
 func Run(s *review.Session, opt Options) error {
-	final, err := tea.NewProgram(newModel(s), tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(newModel(s, opt), tea.WithAltScreen()).Run()
 	if err != nil {
 		return err
 	}

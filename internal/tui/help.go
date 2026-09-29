@@ -41,6 +41,7 @@ func helpGroups() []helpGroup {
 		{"Application", []helpItem{
 			{"tab", "Change panel"},
 			{":", "Commands"},
+			{"c", "Config"},
 			{"esc", "Back"},
 			{"q", "Quit"},
 		}},

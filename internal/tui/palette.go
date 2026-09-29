@@ -66,6 +66,9 @@ func (m model) commands() []command {
 			m.sess.SkipReviewed = !m.sess.SkipReviewed
 			return m.setStatus("Skip reviewed: %v", m.sess.SkipReviewed)
 		}},
+		{"Edit config file", "c", func(m model) (model, tea.Cmd) { return m.editConfig() }},
+		{"Edit flags file", "", func(m model) (model, tea.Cmd) { return m.editFlagsFile() }},
+		{"Reload config", "", func(m model) (model, tea.Cmd) { return m.reload() }},
 		{"Show help", "?", func(m model) (model, tea.Cmd) {
 			m.mode = ModeHelp
 			return m, nil

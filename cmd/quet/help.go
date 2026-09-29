@@ -11,10 +11,15 @@ Usage:
   quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
+  quet init [--global] [--force]
   quet help
 
 Without a corpus, or given a directory, quet opens a file browser: w/s move,
 enter open, a up a folder, . hidden files, q quit.
+
+quet init writes a starter quet.yaml and flags.yaml to the current directory
+(--global: ~/.config/quet/config.yaml and flags.yaml). Existing files are
+never overwritten without --force.
 
 Flags (any position; --flag value and --flag=value are both accepted):
   --config <path>       config file to use instead of ./quet.yaml
@@ -33,11 +38,15 @@ Export flags:
   --format <name>       jsonl (default) or txt
   -f, --force           overwrite an existing output file
 
+Init flags:
+  --global              write to ~/.config/quet/ instead of the current dir
+  -f, --force           overwrite existing config files
+
 Keys:
   w approve   s reject   space needs review   z undo
   a/h previous   d/l next   g first   G last   arrows navigate
-  e edit   f flags   / search   tab change panel   1/2/3 panel   : commands
-  ? help   esc back/close   enter select   q quit
+  e edit   f flags   c config   / search   tab change panel   1/2/3 panel
+  ? help   esc back/close   enter select   : commands   q quit
 
 Data stays local: no telemetry, no network.
 `

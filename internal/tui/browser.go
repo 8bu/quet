@@ -25,7 +25,7 @@ type OpenFunc func(path string) (*review.Session, error)
 // It returns the session that was opened, or nil if the user quit from the
 // browser; the caller must close a non-nil session.
 func Browse(dir string, open OpenFunc, opt Options) (*review.Session, error) {
-	b, err := newBrowser(dir, open)
+	b, err := newBrowser(dir, open, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,8 @@ type browser struct {
 	hidden  bool // show dot-prefixed entries
 
 	open     OpenFunc
-	checking string // path being opened, "" when idle
+	opt      Options // handed to the review model on a successful open
+	checking string  // path being opened, "" when idle
 
 	width, height int
 
@@ -75,12 +76,12 @@ type openedMsg struct {
 	err  error
 }
 
-func newBrowser(dir string, open OpenFunc) (browser, error) {
+func newBrowser(dir string, open OpenFunc, opt Options) (browser, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return browser{}, err
 	}
-	b := browser{dir: abs, open: open, width: 100, height: 30}
+	b := browser{dir: abs, open: open, opt: opt, width: 100, height: 30}
 	if err := b.load(""); err != nil {
 		return browser{}, err
 	}
@@ -278,9 +279,14 @@ func (b browser) opened(msg openedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		return b.fail("Can't open %s: %v", filepath.Base(msg.path), msg.err)
 	}
-	m := newModel(msg.sess)
+	m := newModel(msg.sess, b.opt)
 	m, _ = m.update(tea.WindowSizeMsg{Width: b.width, Height: b.height})
-	return m.setStatus("Opened %s  %d records", filepath.Base(msg.path), msg.sess.Len())
+	hint := m.startupHint()
+	m, cmd := m.setStatus("Opened %s  %d records", filepath.Base(msg.path), msg.sess.Len())
+	if hint != "" {
+		m.status += "  ·  " + hint
+	}
+	return m, cmd
 }
 
 // fail shows an error until the next action replaces it.

@@ -9,7 +9,7 @@ import (
 
 // command is a parsed command line: what to do, with which corpus, and the flags for it.
 type command struct {
-	kind   string // "review" (default), "stats" or "export"
+	kind   string // "review" (default), "stats", "export" or "init"
 	corpus string
 
 	help    bool
@@ -34,7 +34,12 @@ type command struct {
 	withReview bool
 	format     string
 	hasFormat  bool
-	force      bool
+
+	// export and init flags
+	force bool
+
+	// init flags
+	global bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -48,8 +53,9 @@ func usagef(format string, args ...any) error {
 
 // parseArgs parses a command line. The corpus argument and flags may appear in any order;
 // --flag value and --flag=value are both accepted. The first positional "stats" or "export"
-// followed by a corpus argument selects that subcommand ("help" prints the help). With no
-// corpus argument the review TUI opens on the file browser.
+// followed by a corpus argument selects that subcommand; "init" (no corpus) writes starter
+// config files and "help" prints the help. With no corpus argument the review TUI opens on
+// the file browser.
 func parseArgs(args []string) (command, error) {
 	cmd := command{kind: "review", status: "approved"}
 
@@ -110,6 +116,9 @@ func parseArgs(args []string) (command, error) {
 		}
 		cmd.help = true
 		return cmd, nil
+	case positional[0] == "init":
+		cmd.kind = "init"
+		rest = positional[1:]
 	case positional[0] == "stats" || positional[0] == "export":
 		if len(positional) < 2 {
 			return cmd, usagef("missing corpus file")
@@ -176,6 +185,8 @@ func (c *command) setBoolFlag(name string) error {
 		c.withReview = true
 	case "-f", "--force":
 		c.force = true
+	case "--global":
+		c.global = true
 	default:
 		return usagef("unknown flag %s", name)
 	}
@@ -184,6 +195,12 @@ func (c *command) setBoolFlag(name string) error {
 
 // validate rejects flags that do not belong to the selected subcommand.
 func (c *command) validate() error {
+	if c.kind == "init" {
+		return c.validateInit()
+	}
+	if c.global {
+		return usagef("--global is only valid with `quet init`")
+	}
 	switch c.kind {
 	case "stats":
 		if c.hasFilter {
@@ -219,10 +236,36 @@ func (c *command) validate() error {
 		case c.hasFormat:
 			return usagef("--format is only valid with `quet export`")
 		case c.force:
-			return usagef("--force is only valid with `quet export`")
+			return usagef("--force is only valid with `quet export` or `quet init`")
 		case c.hasStatus:
 			return usagef("--status is only valid with `quet export`")
 		}
 	}
 	return nil
+}
+
+// validateInit rejects every flag except --global and --force for `quet init`.
+func (c *command) validateInit() error {
+	var flag string
+	switch {
+	case c.hasFilter:
+		flag = "--filter"
+	case c.noSkipReviewed:
+		flag = "--no-skip-reviewed"
+	case c.hasConfig:
+		flag = "--config"
+	case c.hasFlagsFile:
+		flag = "--flags-file"
+	case c.hasStatus:
+		flag = "--status"
+	case c.hasOutput:
+		flag = "--output"
+	case c.withReview:
+		flag = "--with-review"
+	case c.hasFormat:
+		flag = "--format"
+	default:
+		return nil
+	}
+	return usagef("%s is not valid with `quet init`", flag)
 }

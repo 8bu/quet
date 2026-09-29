@@ -250,6 +250,101 @@ func TestNextUnresolvedStaysAtEnd(t *testing.T) {
 	}
 }
 
+func TestReconfigureRerunsChecksKeepingReviewState(t *testing.T) {
+	path := writeCorpus(t, corpusLines)
+	s := openSession(t, path, autoAdvanceConfig())
+
+	if _, err := s.SetStatus(Approved); err != nil { // n1 -> n2
+		t.Fatalf("SetStatus: %v", err)
+	}
+	if hasFlagName(s.AutoFlags(0), checks.TooLong) {
+		t.Fatalf("n1 flagged too_long before reconfigure: %v", flagNames(s.AutoFlags(0)))
+	}
+	counts := s.Counts()
+	pos, n := s.Position()
+
+	cfg := autoAdvanceConfig()
+	cfg.Checks.MaxChars = 12 // n1 has 15 chars; n2, n3 and n4 have 10
+	s.Reconfigure(config.Settings{Config: cfg, Flags: testFlagDefs})
+
+	if !hasFlagName(s.AutoFlags(0), checks.TooLong) {
+		t.Fatalf("n1 auto flags = %v, want too_long", flagNames(s.AutoFlags(0)))
+	}
+	if hasFlagName(s.AutoFlags(1), checks.TooLong) {
+		t.Fatalf("n2 auto flags = %v, want no too_long", flagNames(s.AutoFlags(1)))
+	}
+	if got := facetValue(s.AutoFlagFacets(), checks.TooLong); got != 1 {
+		t.Fatalf("too_long facet = %d, want 1", got)
+	}
+	if got := s.State(0).EffectiveStatus(); got != Approved {
+		t.Fatalf("status(0) = %v, want approved", got)
+	}
+	if got := s.Counts(); got != counts {
+		t.Fatalf("Counts = %+v, want %+v", got, counts)
+	}
+	if gotPos, gotN := s.Position(); gotPos != pos || gotN != n {
+		t.Fatalf("Position = (%d, %d), want (%d, %d)", gotPos, gotN, pos, n)
+	}
+	if got := s.Current(); got != 1 {
+		t.Fatalf("Current = %d, want 1", got)
+	}
+	if s.Config.Checks.MaxChars != 12 {
+		t.Fatalf("Config.Checks.MaxChars = %d, want 12", s.Config.Checks.MaxChars)
+	}
+}
+
+func TestReconfigureSkipReviewedFollowsOnlyConfigChanges(t *testing.T) {
+	path := writeCorpus(t, corpusLines)
+	s := openSession(t, path, autoAdvanceConfig())
+	s.SkipReviewed = false // runtime toggle
+
+	s.Reconfigure(config.Settings{Config: autoAdvanceConfig(), Flags: testFlagDefs})
+	if s.SkipReviewed {
+		t.Fatalf("unrelated reload overrode the runtime toggle")
+	}
+
+	s.Reconfigure(config.Settings{Config: testConfig(), Flags: testFlagDefs}) // skip_reviewed true -> false
+	if s.SkipReviewed {
+		t.Fatalf("SkipReviewed = true after config turned it off")
+	}
+	s.Reconfigure(config.Settings{Config: autoAdvanceConfig(), Flags: testFlagDefs}) // false -> true
+	if !s.SkipReviewed {
+		t.Fatalf("SkipReviewed = false after config turned it on")
+	}
+}
+
+func TestReconfigureReplacesFlagTaxonomy(t *testing.T) {
+	path := writeCorpus(t, corpusLines)
+	s := openSession(t, path, testConfig())
+	s.FlagsPath = "/old/flags.yaml"
+
+	s.Goto(0)
+	if err := s.SetManualFlags([]string{"slang"}); err != nil {
+		t.Fatalf("SetManualFlags: %v", err)
+	}
+
+	defs := []config.FlagDef{{Name: "ambiguous", Description: "Ambiguous."}}
+	s.Reconfigure(config.Settings{Config: testConfig(), FlagsPath: "/new/flags.yaml", Flags: defs})
+
+	if len(s.FlagDefs) != 1 || s.FlagDefs[0].Name != "ambiguous" {
+		t.Fatalf("FlagDefs = %+v, want [ambiguous]", s.FlagDefs)
+	}
+	if s.FlagsPath != "/new/flags.yaml" {
+		t.Fatalf("FlagsPath = %q, want /new/flags.yaml", s.FlagsPath)
+	}
+	if got := strings.Join(s.State(0).ManualFlags, ","); got != "slang" {
+		t.Fatalf("ManualFlags(0) = %q, want slang kept after taxonomy change", got)
+	}
+	if got, want := facetString(s.ManualFacets()), "ambiguous=0,slang=1"; got != want {
+		t.Fatalf("ManualFacets = %q, want %q", got, want)
+	}
+
+	s.Reconfigure(config.Settings{Config: testConfig()})
+	if s.FlagDefs != nil || s.FlagsPath != "" {
+		t.Fatalf("FlagDefs/FlagsPath = %+v/%q, want cleared", s.FlagDefs, s.FlagsPath)
+	}
+}
+
 func TestEditRevertAndAutoFlags(t *testing.T) {
 	path := writeCorpus(t, corpusLines)
 	s := openSession(t, path, testConfig())

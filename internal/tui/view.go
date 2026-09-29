@@ -111,6 +111,8 @@ func (m model) overlayContent(iw, maxRows int) (string, []string, int) {
 	case ModeExport:
 		rows, sel := m.exportContent(iw, maxRows)
 		return "Export", rows, sel
+	case ModeCreateFlags:
+		return "Flags file", wrapRows([]string{fmt.Sprintf("Create %s with starter flags? y/n", m.createPath)}, iw), -1
 	}
 	return "Quet", nil, -1
 }
@@ -325,6 +327,8 @@ func (m model) footer() string {
 		return "enter export  tab edit path  esc close"
 	case ModeHelp:
 		return "esc close"
+	case ModeCreateFlags:
+		return "y create  n/esc cancel"
 	default:
 		return "w approve  s reject  a/d navigate  e edit  f flags  space review  ? help"
 	}

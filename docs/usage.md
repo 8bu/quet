@@ -4,6 +4,7 @@
 quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]  # review in the TUI (default)
 quet stats <corpus> [flags]                            # print review counts
 quet export <corpus> [flags]                           # write a reviewed corpus
+quet init [--global] [-f|--force]                      # write starter quet.yaml and flags.yaml
 quet help                                              # help (also: quet --help, -h)
 ```
 
@@ -50,6 +51,19 @@ Opening a file runs a gate first: the file must parse, contain at least one reco
 record must have text in one of the recognised text fields. A file that fails stays unopened, the
 reason is shown under the listing, and no sidecar is created for it. A file that passes opens
 straight into the review screen. Review flags such as `--filter` apply to the file you open.
+
+## Init
+
+`quet init` writes a starter `./quet.yaml` (the built-in defaults, commented) and `./flags.yaml`
+(the manual flags `typo`, `ambiguous`, `unnatural`, `synthetic-looking`, `unusual`).
+
+| Flag | Meaning |
+| --- | --- |
+| `--global` | Write `~/.config/quet/config.yaml` and `~/.config/quet/flags.yaml` instead (`$XDG_CONFIG_HOME` is respected) |
+| `-f`, `--force` | Overwrite existing files |
+
+Without `--force` an existing file is kept and a message is printed on stderr. See
+[Configuration](configuration.md#creating-config-files).
 
 ## Stats
 

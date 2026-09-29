@@ -144,11 +144,12 @@ type Session struct {
 	Store        *storage.Store
 	Config       config.Config
 	FlagDefs     []config.FlagDef
+	FlagsPath    string // flags file FlagDefs came from, "" when none; set by the caller
 	SkipReviewed bool
 
 	states    []State         // per corpus index; states[i].Status == "" means Unreviewed
 	byID      map[string]int  // record ID -> corpus index
-	loadFlags [][]checks.Flag // corpus-wide analysis flags at load, per corpus index
+	loadFlags [][]checks.Flag // corpus-wide analysis flags at load or the last reconfigure, per corpus index
 	view      []int           // filtered snapshot of corpus indices (never rebuilt implicitly)
 	pos       int             // position in view; meaningless when view is empty
 	filter    Filter          // filter that built view
@@ -198,23 +199,49 @@ func newSession(c *corpus.Corpus, store *storage.Store, persisted map[string]sto
 	n := len(c.Records)
 	s.states = make([]State, n)
 	s.byID = make(map[string]int, n)
-	texts := make([]string, n)
 	for i := range c.Records {
 		rec := &c.Records[i]
 		s.byID[rec.ID] = i
 		if rs, ok := persisted[rec.ID]; ok {
 			s.states[i] = stateFromStorage(rs)
 		}
-		texts[i] = s.FinalText(i)
 	}
 	s.counts = Counts{Total: n, Unreviewed: n}
 	for i := range s.states {
 		s.counts.track(State{}, s.states[i])
 	}
-	s.Analysis = checks.Analyze(texts, cfg.Checks)
-	s.loadFlags = s.Analysis.Flags
+	s.analyze()
 	s.SetFilter(Filter{Kind: FilterAll})
 	return s
+}
+
+// analyze runs checks.Analyze over the final text of every record with the current check
+// options and makes the result the corpus-wide baseline (Analysis and loadFlags).
+func (s *Session) analyze() {
+	texts := make([]string, len(s.Corpus.Records))
+	for i := range texts {
+		texts[i] = s.FinalText(i)
+	}
+	s.Analysis = checks.Analyze(texts, s.Config.Checks)
+	s.loadFlags = s.Analysis.Flags
+}
+
+// Reconfigure applies reloaded settings to the open session. The flag taxonomy is replaced
+// (manual flags already on records stay). SkipReviewed follows the new config only when
+// skip_reviewed itself changed, so a runtime toggle survives an unrelated reload. Changed
+// check options re-run the corpus-wide analysis on the current final texts. Review states,
+// counts, the store, the view snapshot and the current position are left untouched.
+func (s *Session) Reconfigure(set config.Settings) {
+	s.FlagDefs = set.Flags
+	s.FlagsPath = set.FlagsPath
+	if set.Config.Review.SkipReviewed != s.Config.Review.SkipReviewed {
+		s.SkipReviewed = set.Config.Review.SkipReviewed
+	}
+	rerun := set.Config.Checks != s.Config.Checks
+	s.Config = set.Config
+	if rerun {
+		s.analyze()
+	}
 }
 
 func (s *Session) Close() error {
@@ -252,9 +279,9 @@ func (s *Session) FinalText(i int) string {
 	return s.Corpus.Records[i].Text
 }
 
-// AutoFlags returns the auto flags of record i: the corpus-wide analysis from load, or — for an
-// edited record — freshly computed per-record flags merged with the corpus-wide flags
-// (duplicate, possible_template) the record had at load.
+// AutoFlags returns the auto flags of record i: the corpus-wide analysis from load or the last
+// reconfigure, or — for an edited record — freshly computed per-record flags merged with the
+// corpus-wide flags (duplicate, possible_template) the record had at that baseline.
 func (s *Session) AutoFlags(i int) []checks.Flag {
 	if i < 0 || i >= len(s.states) {
 		return nil
@@ -274,7 +301,7 @@ func (s *Session) AutoFlags(i int) []checks.Flag {
 	return merged
 }
 
-// loadedFlags copies the load-time analysis flags of record i.
+// loadedFlags copies the baseline analysis flags (from load or the last reconfigure) of record i.
 func (s *Session) loadedFlags(i int) []checks.Flag {
 	if i < 0 || i >= len(s.loadFlags) {
 		return nil

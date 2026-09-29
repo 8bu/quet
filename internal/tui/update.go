@@ -30,6 +30,8 @@ func (m model) update(msg tea.Msg) (model, tea.Cmd) {
 			m.status = ""
 		}
 		return m, nil
+	case editorDoneMsg:
+		return m.editorDone(msg)
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
@@ -61,6 +63,8 @@ func (m model) updateKey(k tea.KeyMsg) (model, tea.Cmd) {
 		return m.updateDuplicates(k)
 	case ModeExport:
 		return m.updateExport(k)
+	case ModeCreateFlags:
+		return m.updateCreateFlags(k)
 	default:
 		return m.updateReview(k)
 	}
@@ -116,6 +120,8 @@ func (m model) updateReview(k tea.KeyMsg) (model, tea.Cmd) {
 		return m, nil
 	case "f", "F":
 		return m.openFlags()
+	case "c":
+		return m.editConfig()
 	case "e":
 		if !m.openEditor() {
 			return m.setStatus("No records")
@@ -235,11 +241,19 @@ func (m model) undo() (model, tea.Cmd) {
 	return m.setStatus("Undo")
 }
 
+// openFlags enters ModeFlags. With config support and no flags file it offers
+// to create one instead.
 func (m model) openFlags() (model, tea.Cmd) {
+	if m.opt.Settings != nil && len(m.sess.FlagDefs) == 0 && m.sess.FlagsPath == "" {
+		return m.promptCreateFlags()
+	}
 	if m.sess.Current() < 0 {
 		return m.setStatus("No records")
 	}
 	if !m.flags.open(m.sess) {
+		if m.opt.Settings != nil && m.sess.FlagsPath != "" {
+			return m.setStatus("No flags in %s — use \":\" Edit flags file", m.sess.FlagsPath)
+		}
 		return m.setStatus("No manual flags defined")
 	}
 	m.mode = ModeFlags

@@ -35,6 +35,8 @@ const (
 	ModeDuplicates
 	// ModeExport writes an export preset to a file.
 	ModeExport
+	// ModeCreateFlags asks whether to create a starter flags file.
+	ModeCreateFlags
 )
 
 // String returns the mode's name.
@@ -56,6 +58,8 @@ func (m Mode) String() string {
 		return "duplicates"
 	case ModeExport:
 		return "export"
+	case ModeCreateFlags:
+		return "create flags"
 	default:
 		return "review"
 	}
@@ -86,6 +90,7 @@ func (p panel) title() string {
 // ever rendered; the view is recomputed on demand.
 type model struct {
 	sess *review.Session
+	opt  Options
 
 	mode  Mode
 	focus panel
@@ -105,10 +110,13 @@ type model struct {
 	exp    exportPicker
 	pal    palettePicker
 
+	createPath string // flags file offered by ModeCreateFlags
+
 	quitErr error
 }
 
-func newModel(s *review.Session) model {
+// newModel returns the review model over s; opt enables in-app config support.
+func newModel(s *review.Session, opt Options) model {
 	ed := textarea.New()
 	ed.Prompt = ""
 	ed.Placeholder = ""
@@ -117,6 +125,7 @@ func newModel(s *review.Session) model {
 
 	m := model{
 		sess:   s,
+		opt:    opt,
 		mode:   ModeReview,
 		focus:  panelRecord,
 		width:  100,
@@ -126,6 +135,7 @@ func newModel(s *review.Session) model {
 		search: newSearchPicker(),
 		exp:    newExportPicker(),
 	}
+	m.status = m.startupHint()
 	m.refreshFacets()
 	m.resize()
 	return m
