@@ -11,6 +11,7 @@ quet edit <corpus> <id> (--text s|--text-file f|--revert)  # replace or revert t
 quet undo <corpus> [--json]                                # undo the last change
 quet stats <corpus> [--json]                               # print review counts
 quet export <corpus> [flags]                               # write a reviewed corpus
+quet annotate <queue> --schema <s> --out <l>               # label records against a schema
 quet init [--global] [-f|--force]                          # write starter quet.yaml and flags.yaml
 quet update [--check]                                      # update to the latest release
 quet help                                                  # help (also: quet --help, -h)
@@ -20,6 +21,9 @@ quet help                                                  # help (also: quet --
 sidecar and undo log; they are covered in [Scripting and agents](scripting.md). The review screen
 needs an interactive terminal: when standard input or output is not one, `quet [corpus|dir]` exits
 with status 1 and points you to those commands.
+
+`quet annotate` labels a queue against a schema in its own screen and writes a labels JSONL file;
+it does not use the review sidecar. See [Annotating](annotating.md).
 
 The corpus argument and flags may come in any order, and `--flag value` and `--flag=value` are
 both accepted:

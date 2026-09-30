@@ -11,6 +11,7 @@ Usage:
   quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
+  quet annotate <queue.jsonl> --schema <schema.yaml> --out <labels.jsonl>
   quet init [--global] [--force]
   quet update [--check]
   quet help
@@ -24,6 +25,12 @@ never overwritten without --force.
 
 quet update replaces this binary with the latest release after verifying it
 against the release's SHA256SUMS; --check only reports whether one exists.
+
+quet annotate labels a JSONL queue ({"id","text"} per line) one record at a
+time against a YAML schema of types, statuses and null_target_types: a type,
+an optional target span of the text, and a status. The labels JSONL is
+rewritten each time a record is marked; reopening the same --out resumes.
+Review state is separate: annotating never touches the .quet.db sidecar.
 
 Scripting (no TUI): read and change the same review state and undo log as the
 review screen. Record ids are those printed by quet list.
@@ -64,11 +71,17 @@ Init flags:
   --global              write to ~/.config/quet/ instead of the current dir
   -f, --force           overwrite existing config files
 
+Annotate flags:
+  --schema <path>       YAML schema: types, statuses, null_target_types
+  --out <path>          labels JSONL, rewritten on every mark (resumes)
+
 Keys:
   w approve   s reject   space needs review   z undo
   a/h previous   d/l next   g first   G last   arrows navigate
   e edit   f flags   c config   / search   tab change panel   1/2/3 panel
   ? help   esc back/close   enter select   : commands   q quit
+  annotate: enter complete   u uncertain   s skip   t/1-9 type   x span
+    n null target   esc discard   f filter   a/d prev/next   ? help   q quit
 
 Data stays local: no telemetry; the network is only used by quet update or
 when update.check is on.

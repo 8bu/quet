@@ -49,6 +49,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUpdate(cmd, stdout, stderr)
 	case "review":
 		return runReview(cmd, stdout, stderr)
+	case "annotate":
+		return runAnnotate(cmd, stdout, stderr)
 	default:
 		// --json output is for machines: skip the update notice so nothing but the
 		// result is printed.
@@ -90,7 +92,7 @@ func runOneShot(cmd command, stdout, stderr io.Writer) int {
 }
 
 // isInteractive reports whether stdin and stdout are both terminals, which the review
-// screen needs. Tests replace it.
+// and annotation screens need. Tests replace it.
 var isInteractive = func() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
 }

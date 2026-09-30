@@ -1,0 +1,22 @@
+# Example annotation schema for `quet annotate`: sentiment towards an aspect of a review.
+#   quet annotate examples/annotation/queue.jsonl \
+#     --schema examples/annotation/schema.yaml --out labels.jsonl
+
+version: sentiment-v1
+
+# Types, in the order the picker and the 1-9 keys use. The target is the shortest span of the
+# text naming what the sentiment is about (the dish, the staff, the delivery, ...).
+types:
+  positive: The writer is pleased with the aspect named by the target.
+  negative: The writer is unhappy with the aspect named by the target.
+  mixed: Both praise and complaint about the same aspect.
+  neutral: A factual statement with no sentiment; there is nothing to point at.
+
+# Types whose target must be null.
+null_target_types: [neutral]
+
+# Quet binds enter to complete, u to uncertain and s to skipped.
+statuses:
+  complete: Type and target (or an explicit null target) confidently determined.
+  uncertain: The text does not settle the type or the target.
+  skipped: Not a review, or not worth labelling.

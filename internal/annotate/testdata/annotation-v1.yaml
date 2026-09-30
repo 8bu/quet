@@ -1,0 +1,45 @@
+# Gidi annotation-v1: canonical label contract for the first supervised baseline.
+# Human-readable guide: docs/annotation-v1.md. Validator: gidi.annotation.schema.
+# Changing anything here is a new annotation version, not an edit.
+
+version: annotation-v1
+
+# Canonical transaction taxonomy. There is deliberately no "other": notes whose type cannot be
+# determined from the text get annotation_status "uncertain" instead.
+types:
+  expense: Money leaves the user with no expectation of principal repayment.
+  income: >-
+    Money received as salary, freelance/client payment, gift, sale proceeds, rewards, or other
+    ordinary incoming money that is neither borrowing, debt repayment, nor refund.
+  borrow: The user receives loan principal and now owes another party.
+  lend: The user gives loan principal to another party and expects repayment.
+  repayment_in: Another party repays money they previously owed the user.
+  repayment_out: The user repays money they previously owed another party.
+  transfer: >-
+    Movement between the user's own accounts, wallets, cash holdings, or savings. No economic
+    income or expense occurs.
+  refund: Money returned to the user as reversal/reimbursement of an earlier expense.
+
+# Target = minimal explicit expression identifying the external financial counterparty
+# (companions are not targets; a kinship/title prefix before a name is excluded, a kinship term
+# that is the only identifier is kept; several plausible counterparties -> uncertain).
+# The validator checks span mechanics only; the semantic rules live in docs/annotation-v1.md.
+# Types whose target must be null: transfers move money between the user's own holdings.
+null_target_types: [transfer]
+
+statuses:
+  complete: Type (and target, or explicit null target) confidently determined from the text.
+  uncertain: The text does not establish the type or the target; never forced.
+  skipped: Not a usable finance note, or the annotator chose not to label it.
+
+# Only these statuses may enter the initial training split.
+trainable_statuses: [complete]
+
+queue:
+  corpus: corpus/reviewed/baseline-01.jsonl
+  out: datasets/annotation-v1/queue.jsonl
+  size: 600
+  # Records are ordered by sha256("<seed>:<id>") and the first `size` approved ones are taken.
+  seed: annotation-v1
+  # Quet review status a corpus record must have to be queued.
+  review_status: approved

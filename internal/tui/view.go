@@ -93,7 +93,7 @@ func (m model) overlayContent(iw, maxRows int) (string, []string, int) {
 	}
 	switch m.mode {
 	case ModeHelp:
-		return "Help", helpRows(iw, maxRows), -1
+		return "Help", helpRows(helpGroups(), iw, maxRows), -1
 	case ModePalette:
 		rows, sel := m.paletteContent(iw, maxRows)
 		return "Commands", rows, sel

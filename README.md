@@ -57,11 +57,26 @@ quet set examples/corpus.jsonl id:note-001 --status approved
 
 See [Scripting and agents](docs/scripting.md).
 
+## Annotating
+
+`quet annotate` labels a queue of `{"id", "text"}` records one at a time against a YAML schema you
+write: a type, an optional target span of the text, and a status (`enter` complete · `u` uncertain
+· `s` skip). Labels go to a JSONL file that is rewritten after every mark, so reopening it resumes;
+review state is not touched.
+
+```sh
+quet annotate examples/annotation/queue.jsonl \
+  --schema examples/annotation/schema.yaml --out labels.jsonl
+```
+
+See [Annotating](docs/annotating.md).
+
 ## Documentation
 
 | | |
 | --- | --- |
 | [Usage](docs/usage.md) | Command line, file browser, `init`, `stats`, `update` |
+| [Annotating](docs/annotating.md) | `quet annotate`: schemas, labels output, validation, span keys, offsets |
 | [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
 | [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |

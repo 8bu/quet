@@ -11,8 +11,8 @@ import (
 
 // command is a parsed command line: what to do, with which corpus, and the flags for it.
 type command struct {
-	kind   string // "review" (default), "stats", "export", "init", "update", or a scripting command: "list", "show", "set", "flag", "suggest", "edit", "undo"
-	corpus string
+	kind   string   // "review" (default), "stats", "export", "init", "update", "annotate", or a scripting command: "list", "show", "set", "flag", "suggest", "edit", "undo"
+	corpus string   // the corpus, or the queue file for "annotate"
 	ids    []string // record IDs after the corpus (scripting commands)
 
 	help    bool
@@ -60,6 +60,12 @@ type command struct {
 	textFile    string
 	hasTextFile bool
 	revert      bool
+
+	// annotate flags
+	schemaPath string
+	hasSchema  bool
+	outPath    string
+	hasOut     bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -75,6 +81,7 @@ func usagef(format string, args ...any) error {
 // --flag value and --flag=value are both accepted. The first positional "stats", "export"
 // or a scripting command (list, show, set, flag, suggest, edit, undo) followed by a corpus
 // argument selects that subcommand; the scripting commands take record IDs after the corpus.
+// "annotate" followed by a queue file labels it against --schema into --out.
 // "init" (no corpus) writes starter config files, "update" (no corpus) updates the binary
 // and "help" prints the help. With no corpus argument the review TUI opens on the file browser.
 func parseArgs(args []string) (command, error) {
@@ -147,6 +154,13 @@ func parseArgs(args []string) (command, error) {
 		cmd.kind = positional[0]
 		cmd.corpus = positional[1]
 		rest = positional[2:]
+	case positional[0] == "annotate":
+		if len(positional) < 2 {
+			return cmd, usagef("missing queue file")
+		}
+		cmd.kind = positional[0]
+		cmd.corpus = positional[1]
+		rest = positional[2:]
 	case slices.Contains(scriptingKinds, positional[0]):
 		if len(positional) < 2 {
 			return cmd, usagef("missing corpus file")
@@ -209,7 +223,7 @@ func splitFlag(arg string) (name, value string, hasValue bool) {
 func valueFlag(name string) bool {
 	switch name {
 	case "--filter", "--flags-file", "--config", "--status", "-o", "--output", "--format",
-		"--limit", "--add", "--remove", "--text", "--text-file":
+		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out":
 		return true
 	}
 	return false
@@ -224,6 +238,10 @@ func (c *command) setValueFlag(name, value string) error {
 		c.flagsFile, c.hasFlagsFile = value, true
 	case "--config":
 		c.configPath, c.hasConfig = value, true
+	case "--schema":
+		c.schemaPath, c.hasSchema = value, true
+	case "--out":
+		c.outPath, c.hasOut = value, true
 	case "--status":
 		c.status, c.hasStatus = value, true
 	case "-o", "--output":
@@ -293,11 +311,21 @@ func (c *command) validate() error {
 	if c.check && c.kind != "update" {
 		return usagef("--check is only valid with `quet update`")
 	}
+	if c.kind != "annotate" {
+		if c.hasSchema {
+			return usagef("--schema is only valid with `quet annotate`")
+		}
+		if c.hasOut {
+			return usagef("--out is only valid with `quet annotate`")
+		}
+	}
 	switch c.kind {
 	case "init":
 		return c.validateOnly("--global", "--force")
 	case "update":
 		return c.validateOnly("--check")
+	case "annotate":
+		return c.validateAnnotate()
 	case "list", "show", "set", "flag", "suggest", "edit", "undo":
 		return c.validateScripting()
 	}
@@ -352,6 +380,20 @@ func (c *command) validate() error {
 		case c.hasStatus:
 			return usagef("--status is only valid with `quet export` or `quet set`")
 		}
+	}
+	return nil
+}
+
+// validateAnnotate checks the flags of `quet annotate`: only --schema and --out, both required.
+func (c *command) validateAnnotate() error {
+	if err := c.validateOnly("--schema", "--out"); err != nil {
+		return err
+	}
+	if c.schemaPath == "" {
+		return usagef("`quet annotate` needs --schema <schema.yaml>")
+	}
+	if c.outPath == "" {
+		return usagef("`quet annotate` needs --out <labels.jsonl>")
 	}
 	return nil
 }
@@ -453,5 +495,7 @@ func (c *command) givenFlags() []string {
 	add(c.hasText, "--text")
 	add(c.hasTextFile, "--text-file")
 	add(c.revert, "--revert")
+	add(c.hasSchema, "--schema")
+	add(c.hasOut, "--out")
 	return flags
 }

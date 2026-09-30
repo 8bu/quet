@@ -95,12 +95,11 @@ func layoutHelpGroups(groups []helpGroup, cols, colW int) []string {
 	return rows
 }
 
-// helpRows lays the help reference out in the fewest columns that fit maxRows.
-func helpRows(w, maxRows int) []string {
-	if w < 1 || maxRows < 1 {
+// helpRows lays groups out in the fewest columns that fit maxRows.
+func helpRows(groups []helpGroup, w, maxRows int) []string {
+	if w < 1 || maxRows < 1 || len(groups) == 0 {
 		return nil
 	}
-	groups := helpGroups()
 	colW := min(32, w)
 	maxCols := min(max(w/(colW+2), 1), len(groups))
 	best := layoutHelpGroups(groups, maxCols, colW)

@@ -1,0 +1,8 @@
+{"id": "baseline-01-0cc99449b6ca", "text": "bo heo dat 50k", "corpus": "corpus/reviewed/baseline-01.jsonl", "position": 1}
+{"id":"case-lend","text":"cho Nam vay 500k"}
+{"id":"case-repayment-in","text":"Nam trả nợ tao 500k"}
+
+{"id":"case-expense","text":"ăn với Nam ở Pizza 4P 300k","source":"fixture"}
+{"id":"case-transfer","text":"ck 5tr qua tk tiết kiệm"}
+{"id":"case-uncertain","text":"Nam gửi tao 500k"}
+{"id": "baseline-01-efb9ecbae1cf", "text": "con no Nam 300k tien an", "corpus": "corpus/reviewed/baseline-01.jsonl", "position": 2}
