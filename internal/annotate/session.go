@@ -14,21 +14,36 @@ import (
 // Filter selects which queue records filtered navigation (PrevMatch, NextMatch, Advance, SetFilter) visits.
 type Filter int
 
-// Filters in display order.
+// Filters in display order. The proposal filters exist only in a session with proposals loaded (Session.Filters).
 const (
-	FilterUnfinished Filter = iota // records with no saved label (default)
-	FilterComplete                 // saved status complete
-	FilterUncertain                // saved status uncertain
-	FilterSkipped                  // saved status skipped
-	FilterAll                      // every record
+	FilterUnfinished        Filter = iota // records with no saved label (default)
+	FilterComplete                        // saved status complete
+	FilterUncertain                       // saved status uncertain
+	FilterSkipped                         // saved status skipped
+	FilterAll                             // every record
+	FilterProposed                        // records with a proposal
+	FilterUnproposed                      // records without a proposal
+	FilterProposedUncertain               // records whose proposal status is uncertain
 )
 
 // filterNames are the Filter display names, indexed by Filter.
-var filterNames = [...]string{"unfinished", "complete", "uncertain", "skipped", "all"}
+var filterNames = [...]string{"unfinished", "complete", "uncertain", "skipped", "all", "proposed", "unproposed", "proposed uncertain"}
 
-// Filters returns every filter in display order.
-func Filters() []Filter {
-	return []Filter{FilterUnfinished, FilterComplete, FilterUncertain, FilterSkipped, FilterAll}
+// baseFilters is the number of filters every session has: those before FilterProposed.
+const baseFilters = int(FilterProposed)
+
+// Filters returns the filters of this session in display order: the five saved-label filters, followed by
+// proposed, unproposed and proposed uncertain when proposals are loaded.
+func (s *Session) Filters() []Filter {
+	n := baseFilters
+	if s.HasProposals() {
+		n = len(filterNames)
+	}
+	filters := make([]Filter, n)
+	for i := range filters {
+		filters[i] = Filter(i)
+	}
+	return filters
 }
 
 // String returns the filter's display name.
@@ -39,15 +54,18 @@ func (f Filter) String() string {
 	return fmt.Sprintf("Filter(%d)", int(f))
 }
 
-// ParseFilter parses a filter display name (case-insensitive).
-func ParseFilter(s string) (Filter, error) {
-	name := strings.ToLower(strings.TrimSpace(s))
-	for _, f := range Filters() {
-		if f.String() == name {
+// ParseFilter parses the display name (case-insensitive) of one of this session's filters (Filters).
+func (s *Session) ParseFilter(name string) (Filter, error) {
+	want := strings.ToLower(strings.TrimSpace(name))
+	filters := s.Filters()
+	names := make([]string, len(filters))
+	for i, f := range filters {
+		if f.String() == want {
 			return f, nil
 		}
+		names[i] = f.String()
 	}
-	return 0, fmt.Errorf("unknown filter %q (want one of %s)", s, strings.Join(filterNames[:], ", "))
+	return 0, fmt.Errorf("unknown filter %q (want one of %s)", name, strings.Join(names, ", "))
 }
 
 // Draft is the editable type/target of one record: pending edits, else the saved label's values.
@@ -80,6 +98,7 @@ type Session struct {
 	now       func() time.Time
 	start     time.Time
 	recheck   *recheckState // nil in a normal session
+	proposals *proposalSet  // nil unless LoadProposals succeeded
 }
 
 // recheckState is the canonical labels file of a re-check session.
@@ -330,13 +349,22 @@ func (s *Session) ClearTarget(i int) {
 // pushed on the undo stack. An existing label is overwritten in place, so the file keeps one line per id. Does NOT
 // move the cursor.
 func (s *Session) Mark(i int, status string) error {
+	return s.mark(i, status, s.Draft(i), "")
+}
+
+// mark is the save path shared by Mark and AcceptProposal: it builds the label of record i from status, the type and
+// target of d and note (the existing saved note when note is empty), then validates, saves, drops the draft, counts
+// the mark and pushes the undo entry. Nothing changes on error.
+func (s *Session) mark(i int, status string, d Draft, note string) error {
 	if !s.schema.HasStatus(status) {
 		return fmt.Errorf("status %q is not declared in the schema", status)
 	}
 	item := s.items[i]
-	d := s.Draft(i)
 	prev, had := s.labels[item.ID]
-	l := Label{ID: item.ID, Status: status, Target: d.Target, Note: prev.Note}
+	if note == "" {
+		note = prev.Note
+	}
+	l := Label{ID: item.ID, Status: status, Target: d.Target, Note: note}
 	if s.schema.NullLabel(status) {
 		l.Target = nil
 	} else if d.Type != "" {
@@ -436,7 +464,8 @@ func (s *Session) unfinished(i int) bool {
 }
 
 // Matches reports whether record i matches filter f. Unfinished = no saved label; labels with a status other than
-// complete/uncertain/skipped match only FilterAll.
+// complete/uncertain/skipped match only FilterAll. The proposal filters match only in a session with proposals
+// loaded (matchesProposal).
 func (s *Session) Matches(i int, f Filter) bool {
 	l, ok := s.labels[s.items[i].ID]
 	switch f {
@@ -450,6 +479,8 @@ func (s *Session) Matches(i int, f Filter) bool {
 		return ok && l.Status == StatusSkipped
 	case FilterAll:
 		return true
+	case FilterProposed, FilterUnproposed, FilterProposedUncertain:
+		return s.matchesProposal(i, f)
 	}
 	return false
 }

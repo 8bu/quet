@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -193,6 +194,16 @@ func TestParseArgs(t *testing.T) {
 			args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--labels=l.jsonl"},
 			want: command{kind: "annotate", corpus: "q.jsonl", status: "approved", schemaPath: "s.yaml", hasSchema: true, labelsPath: "l.jsonl", hasLabels: true},
 		},
+		{
+			name: "annotate with proposals and out",
+			args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--out", "l.jsonl", "--proposals", "p.jsonl"},
+			want: command{kind: "annotate", corpus: "q.jsonl", status: "approved", schemaPath: "s.yaml", hasSchema: true, outPath: "l.jsonl", hasOut: true, proposalsPath: "p.jsonl", hasProposals: true},
+		},
+		{
+			name: "annotate re-check with proposals equals flag",
+			args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--labels=l.jsonl", "--proposals=p.jsonl"},
+			want: command{kind: "annotate", corpus: "q.jsonl", status: "approved", schemaPath: "s.yaml", hasSchema: true, labelsPath: "l.jsonl", hasLabels: true, proposalsPath: "p.jsonl", hasProposals: true},
+		},
 	}
 
 	for _, tt := range tests {
@@ -281,6 +292,13 @@ func TestParseArgsErrors(t *testing.T) {
 		{name: "labels with list", args: []string{"list", "corpus.jsonl", "--labels", "l.jsonl"}, want: "--labels is only valid with `quet annotate`"},
 		{name: "schema with list", args: []string{"list", "corpus.jsonl", "--schema", "s.yaml"}, want: "--schema is only valid with `quet annotate`"},
 		{name: "schema with init", args: []string{"init", "--schema", "s.yaml"}, want: "--schema is only valid with `quet annotate`"},
+		{name: "proposals when reviewing", args: []string{"corpus.jsonl", "--proposals", "p.jsonl"}, want: "--proposals is only valid with `quet annotate`"},
+		{name: "proposals with stats", args: []string{"stats", "corpus.jsonl", "--proposals=p.jsonl"}, want: "--proposals is only valid with `quet annotate`"},
+		{name: "proposals with export", args: []string{"export", "corpus.jsonl", "--proposals", "p.jsonl"}, want: "--proposals is only valid with `quet annotate`"},
+		{name: "proposals with list", args: []string{"list", "corpus.jsonl", "--proposals", "p.jsonl"}, want: "--proposals is only valid with `quet annotate`"},
+		{name: "proposals with init", args: []string{"init", "--proposals", "p.jsonl"}, want: "--proposals is only valid with `quet annotate`"},
+		{name: "annotate proposals missing value", args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--out", "l.jsonl", "--proposals"}, want: "flag --proposals needs a value"},
+		{name: "annotate with empty proposals", args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--out", "l.jsonl", "--proposals="}, want: "--proposals"},
 	}
 
 	for _, tt := range tests {
@@ -469,5 +487,107 @@ func TestAnnotateLaunchesScreen(t *testing.T) {
 	}
 	if *launched != 1 {
 		t.Errorf("annotation screen launched %d times, want 1", *launched)
+	}
+}
+
+// writeProposals writes body to a proposals file in a temporary directory and returns its path.
+func writeProposals(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "proposals.jsonl")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestAnnotateProposalsMissingFileSkipsScreen(t *testing.T) {
+	launched := stubAnnotateScreen(t, true)
+	queue, schema, out := writeAnnotateFixture(t)
+	missing := filepath.Join(t.TempDir(), "missing.jsonl")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"annotate", queue, "--schema", schema, "--out", out, "--proposals", missing}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.HasPrefix(got, "quet: ") || !strings.Contains(got, missing) || strings.Contains(got, "Usage:") {
+		t.Errorf("stderr %q, want a one-line runtime error naming %s", got, missing)
+	}
+	if *launched != 0 {
+		t.Errorf("annotation screen launched %d times, want 0", *launched)
+	}
+}
+
+func TestAnnotateProposalsErrorBeforeTerminalCheck(t *testing.T) {
+	launched := stubAnnotateScreen(t, false)
+	queue, schema, out := writeAnnotateFixture(t)
+	proposals := writeProposals(t, "not json\n")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"annotate", queue, "--schema", schema, "--out", out, "--proposals", proposals}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, proposals+":1") || strings.Contains(got, "interactive terminal") {
+		t.Errorf("stderr %q, want the proposals load error citing %s:1 and no terminal complaint", got, proposals)
+	}
+	if *launched != 0 {
+		t.Errorf("annotation screen launched %d times, want 0", *launched)
+	}
+}
+
+func TestAnnotateProposalsLaunchesScreenAndReportsIgnored(t *testing.T) {
+	var got *annotate.Session
+	launched := stubAnnotateScreen(t, true)
+	launchAnnotate = func(s *annotate.Session) error {
+		got = s
+		*launched++
+		return nil
+	}
+	queue, schema, out := writeAnnotateFixture(t)
+	proposals := writeProposals(t, "{\"id\":\"a\",\"annotation_status\":\"complete\",\"type\":\"positive\"}\n"+
+		"{\"id\":\"zzz\",\"annotation_status\":\"complete\"}\n{\"id\":\"yyy\",\"annotation_status\":\"complete\"}\n")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"annotate", queue, "--schema", schema, "--out", out, "--proposals", proposals}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	if *launched != 1 || got == nil || !got.HasProposals() || got.ProposalCount() != 1 {
+		t.Fatalf("launched %d times, session %v: want one launch with one queue proposal", *launched, got)
+	}
+	want := "quet: ignored 2 proposal(s) for ids not in the queue: yyy, zzz\n"
+	if stderr.String() != want {
+		t.Errorf("stderr %q, want %q", stderr.String(), want)
+	}
+}
+
+func TestAnnotateProposalsRecheckCombines(t *testing.T) {
+	launched := stubAnnotateScreen(t, true)
+	queue, schema, labels := writeAnnotateFixture(t)
+	body := "{\"id\":\"elsewhere\",\"annotation_status\":\"complete\",\"type\":\"positive\",\"target\":null}\n"
+	if err := os.WriteFile(labels, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proposals := writeProposals(t, "{\"id\":\"b\",\"annotation_status\":\"uncertain\"}\n")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"annotate", queue, "--schema", schema, "--labels", labels, "--proposals", proposals}, &stdout, &stderr)
+	if code != 0 || *launched != 1 || stderr.Len() != 0 {
+		t.Errorf("exit %d, launched %d, stderr %q; want 0, 1, empty", code, *launched, stderr.String())
+	}
+}
+
+func TestIgnoredProposalsMessageCapsList(t *testing.T) {
+	var ids []string
+	for i := range 13 {
+		ids = append(ids, fmt.Sprintf("id%02d", i))
+	}
+	want := "ignored 13 proposal(s) for ids not in the queue: id00, id01, id02, id03, id04, id05, id06, id07, id08, id09, … (+3 more)"
+	if got := ignoredProposalsMessage(ids); got != want {
+		t.Errorf("message %q, want %q", got, want)
+	}
+	if got, want := ignoredProposalsMessage(ids[:10]), "ignored 10 proposal(s) for ids not in the queue: id00, id01, id02, id03, id04, id05, id06, id07, id08, id09"; got != want {
+		t.Errorf("message %q, want %q", got, want)
 	}
 }

@@ -11,7 +11,7 @@ quet edit <corpus> <id> (--text s|--text-file f|--revert)  # replace or revert t
 quet undo <corpus> [--json]                                # undo the last change
 quet stats <corpus> [--json]                               # print review counts
 quet export <corpus> [flags]                               # write a reviewed corpus
-quet annotate <queue> --schema <s> (--out|--labels) <l>    # label records against a schema
+quet annotate <queue> --schema <s> (--out|--labels) <l> [--proposals <p>]  # label records against a schema
 quet init [--global] [-f|--force]                          # write starter quet.yaml and flags.yaml
 quet update [--check]                                      # update to the latest release
 quet help                                                  # help (also: quet --help, -h)
@@ -32,6 +32,16 @@ quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
 ```
 
 See [Annotating](annotating.md) and its [Re-check subset](annotating.md#re-check-subset) section.
+
+Add `--proposals <proposals.jsonl>` to show advisory suggested labels next to each record's current
+annotation; `p` accepts one, `P` loads it into the draft to edit, and the file is never written. It
+combines with `--out` or `--labels`:
+
+```sh
+quet annotate recheck.jsonl --schema annotation.yaml --labels labels.jsonl --proposals proposals.jsonl
+```
+
+See [Proposals](annotating.md#proposals) for the format, validation and safety guarantees.
 
 The corpus argument and flags may come in any order, and `--flag value` and `--flag=value` are
 both accepted:

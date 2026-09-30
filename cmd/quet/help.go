@@ -11,7 +11,7 @@ Usage:
   quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
-  quet annotate <queue.jsonl> --schema <schema.yaml> (--out|--labels) <labels.jsonl>
+  quet annotate <queue.jsonl> --schema <schema.yaml> (--out|--labels) <labels.jsonl> [--proposals <proposals.jsonl>]
   quet init [--global] [--force]
   quet update [--check]
   quet help
@@ -37,6 +37,14 @@ Re-check a subset: --labels opens a queue that is a subset of an existing
 canonical labels file instead of --out. Only the queue's records are shown and
 editable; every other label is kept byte-for-byte.
   quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
+
+AI proposals: --proposals opens an advisory JSONL of suggested labels ({"id",
+"annotation_status"} plus optional "type", "target", "note", "confidence",
+"reason") next to each record's current annotation. Press p to accept one, P
+to load it into the draft and edit it, or ignore it. The file is never
+written; nothing is saved without p, enter, u or s; confidence and reason are
+never written to the labels file.
+  quet annotate recheck.jsonl --schema annotation.yaml --labels labels.jsonl --proposals proposals.jsonl
 
 Scripting (no TUI): read and change the same review state and undo log as the
 review screen. Record ids are those printed by quet list.
@@ -88,6 +96,14 @@ Annotate flags:
                         all others are preserved byte-for-byte; written
                         atomically, refused if another program changed the
                         file since quet last read or wrote it. Excludes --out.
+  --proposals <path>    advisory suggestions JSONL (read-only, optional, works
+                        with --out or --labels): one object per line with
+                        id and annotation_status, optionally type, target
+                        ({text,start,end} or null), note, confidence (0..1)
+                        and reason; other keys are ignored. Ids outside the
+                        queue are ignored and reported on exit; invalid lines
+                        and duplicate ids are refused. Confidence and reason
+                        are never written.
 
 Keys:
   w approve   s reject   space needs review   z undo
@@ -97,6 +113,7 @@ Keys:
   annotate: enter complete   u uncertain   s skip   t/1-9 type   x span
     n null target   esc discard   a/d prev/next (any record)   [/] in filter
     g/G first/last   : or # go to   z undo   f filter   ? help   q quit
+    with --proposals: p accept proposal   P edit proposal
 
 Data stays local: no telemetry; the network is only used by quet update or
 when update.check is on.

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -140,13 +141,71 @@ func (m annotModel) headerRows() []string {
 	progress := fmt.Sprintf("filter %s %s/%d  ·  session %d · %.1f/min", m.sess.Filter(), posText, n, marked, rate)
 	if recheck {
 		labels := fmt.Sprintf("Labels: %d total · %d in current queue", m.sess.LabelsTotal(), m.sess.LabelsInQueue())
-		return []string{title, counts, labels, progress}
+		rows := []string{title, counts, labels}
+		if m.sess.HasProposals() {
+			rows = append(rows, m.proposalHeader())
+		}
+		return append(rows, progress)
+	}
+	if m.sess.HasProposals() {
+		return []string{title, counts, m.proposalHeader(), progress}
 	}
 	return []string{title, counts, progress}
 }
 
+// proposalHeader renders the header row of a session with proposals: how many apply
+// to the queue and how many ids were ignored.
+func (m annotModel) proposalHeader() string {
+	return styleProposal.Render(proposalSummary(m.sess))
+}
+
+// styleProposal renders advisory proposal text: italic and in its own colour, so it is
+// never mistaken for the saved annotation.
+var styleProposal = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("141"))
+
+// proposalLines renders record i's proposal block: a title saying it is not accepted,
+// the suggested type, target, status, confidence, reason and note, and whether it
+// matches the saved label or is invalid under the schema. It is nil without a proposal.
+func (m annotModel) proposalLines(i, iw int) []string {
+	p, ok := m.sess.Proposal(i)
+	if !ok {
+		return nil
+	}
+	typ := "null"
+	if p.Type != nil {
+		typ = *p.Type
+	}
+	target := "null"
+	if p.Target != nil {
+		target = fmt.Sprintf("%q [%d,%d)", p.Target.Text, p.Target.Start, p.Target.End)
+	}
+	confidence := "-"
+	if p.Confidence != nil {
+		confidence = fmt.Sprintf("%.2f", *p.Confidence)
+	}
+	lines := []string{"Type: " + typ, "Target: " + target, "Status: " + p.Status, "Confidence: " + confidence}
+	if p.Reason != "" {
+		lines = append(lines, "Reason: "+squeeze(p.Reason))
+	}
+	if p.Note != "" {
+		lines = append(lines, "Note: "+squeeze(p.Note))
+	}
+	if err := m.sess.ProposalProblem(i); err != nil {
+		lines = append(lines, "⚠ invalid: "+squeeze(err.Error()))
+	} else if m.sess.ProposalMatches(i) {
+		lines = append(lines, "✓ matches current")
+	}
+	rows := []string{styleProposal.Bold(true).Render("Proposal — not accepted")}
+	for _, row := range wrapRows(lines, iw) {
+		rows = append(rows, styleProposal.Render(row))
+	}
+	return rows
+}
+
 // recordBox draws the record panel: the text (target or selection
-// highlighted) followed by the draft's type, target and saved status.
+// highlighted) followed by the draft's type, target and saved status. When the record
+// has a proposal, the draft section is titled Current and a distinct, advisory
+// Proposal block follows it.
 func (m annotModel) recordBox(w, h int) string {
 	if m.sess.Len() == 0 {
 		return box("Record", true, w, h, []string{"no records"}, -1)
@@ -175,7 +234,14 @@ func (m annotModel) recordBox(w, h int) string {
 		extras = append(extras, styleMuted.Render(fmt.Sprintf("selection: %q [%d,%d)", string(runes[lo:hi+1]), lo, hi+1)))
 	}
 	extras = append(extras, "")
-	extras = append(extras, wrapRows(m.metaLines(i, d), max(iw, 1))...)
+	if prop := m.proposalLines(i, max(iw, 1)); len(prop) > 0 {
+		extras = append(extras, styleTitle.Render("Current"))
+		extras = append(extras, wrapRows(m.metaLines(i, d), max(iw, 1))...)
+		extras = append(extras, "")
+		extras = append(extras, prop...)
+	} else {
+		extras = append(extras, wrapRows(m.metaLines(i, d), max(iw, 1))...)
+	}
 
 	if avail := max(1, ih-len(extras)); len(text) > avail {
 		start, end := windowRange(len(text), focus, avail)
@@ -404,13 +470,17 @@ func (m annotModel) typesContent(iw, maxRows int) ([]string, int) {
 // filterContent renders the filter picker with each filter's record count.
 func (m annotModel) filterContent(iw, maxRows int) ([]string, int) {
 	iw, maxRows = max(iw, 1), max(maxRows, 1)
-	filters := annotate.Filters()
+	filters := m.sess.Filters()
+	nameW := 11
+	for _, f := range filters {
+		nameW = max(nameW, len(f.String())+1)
+	}
 	return listRows(len(filters), m.filters.cursor, maxRows, func(i int) string {
 		count := 0
 		if i < len(m.filters.counts) {
 			count = m.filters.counts[i]
 		}
-		line := fmt.Sprintf("%-11s %d", filters[i], count)
+		line := fmt.Sprintf("%-*s %d", nameW, filters[i], count)
 		if filters[i] == m.sess.Filter() {
 			line += "  " + styleMuted.Render("(active)")
 		}
@@ -428,20 +498,21 @@ func (m annotModel) helpLayout() (int, int) {
 // helpMaxScroll returns the largest useful help scroll offset.
 func (m annotModel) helpMaxScroll() int {
 	iw, maxRows := m.helpLayout()
-	return max(0, len(helpRows(annotHelpGroups(), iw, maxRows))-maxRows)
+	return max(0, len(helpRows(annotHelpGroups(m.sess.HasProposals()), iw, maxRows))-maxRows)
 }
 
 // helpContent returns the visible window of the help reference.
 func (m annotModel) helpContent(iw, maxRows int) []string {
 	iw, maxRows = max(iw, 1), max(maxRows, 1)
-	rows := helpRows(annotHelpGroups(), iw, maxRows)
+	rows := helpRows(annotHelpGroups(m.sess.HasProposals()), iw, maxRows)
 	off := max(0, min(m.helpScroll, len(rows)-maxRows))
 	return rows[off:min(len(rows), off+maxRows)]
 }
 
-// annotHelpGroups returns the annotation keyboard reference.
-func annotHelpGroups() []helpGroup {
-	return []helpGroup{
+// annotHelpGroups returns the annotation keyboard reference; proposals adds the
+// Proposals group of a session with a proposals file.
+func annotHelpGroups(proposals bool) []helpGroup {
+	groups := []helpGroup{
 		{"Label", []helpItem{
 			{"enter", "Complete"},
 			{"u", "Uncertain"},
@@ -490,6 +561,16 @@ func annotHelpGroups() []helpGroup {
 			{"j/k", "Scroll help"},
 		}},
 	}
+	if proposals {
+		groups = slices.Insert(groups, len(groups)-1, helpGroup{"Proposals", []helpItem{
+			{"p", "Accept and save"},
+			{"P", "Load, then edit"},
+			{"advisory", "Suggestions only"},
+			{"confidence", "Not ground truth"},
+			{"saving", "p/enter/u/s only"},
+		}})
+	}
+	return groups
 }
 
 // footerItems returns the context shortcuts for the current mode, one
@@ -507,8 +588,14 @@ func (m annotModel) footerItems() []string {
 	case annotGoto:
 		return []string{"type position or id", "enter go", "esc cancel"}
 	default:
-		return []string{"t type", "x target", "n null", "enter complete", "u uncertain", "s skip", "a/d prev/next",
+		items := []string{"t type", "x target", "n null", "enter complete", "u uncertain", "s skip", "a/d prev/next",
 			"[/] prev/next " + m.sess.Filter().String(), "z undo", ": go to", "f filter", "? help", "q quit"}
+		if m.sess.Len() > 0 {
+			if _, ok := m.sess.Proposal(m.sess.Cursor()); ok {
+				items = append([]string{"p accept proposal", "P edit proposal"}, items...)
+			}
+		}
+		return items
 	}
 }
 

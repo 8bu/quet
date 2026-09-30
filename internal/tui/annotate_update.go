@@ -105,6 +105,14 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 		return m.mark(annotate.StatusSkipped)
 	case "t":
 		return m.openTypes(), nil
+	case "p", "P":
+		if !m.sess.HasProposals() {
+			return m, nil
+		}
+		if key == "p" {
+			return m.acceptProposal()
+		}
+		return m.applyProposal()
 	case "x":
 		return m.openSpan()
 	case "n":
@@ -176,6 +184,41 @@ func (m annotModel) mark(status string) (annotModel, tea.Cmd) {
 	if had {
 		what = "revised " + status
 	}
+	return m.afterMark(what, id)
+}
+
+// acceptProposal saves the current record's proposal as its label and then behaves
+// like a successful mark: it advances and reports what was saved. A missing or
+// invalid proposal is reported and nothing is written.
+func (m annotModel) acceptProposal() (annotModel, tea.Cmd) {
+	i := m.sess.Cursor()
+	id := m.sess.Item(i).ID
+	p, ok := m.sess.Proposal(i)
+	if !ok {
+		return m.setError("no proposal for %s", id)
+	}
+	if err := m.sess.AcceptProposal(i); err != nil {
+		return m.setError("accept proposal %s: %v", id, err)
+	}
+	return m.afterMark("accepted proposal "+p.Status, id)
+}
+
+// applyProposal loads the current record's proposal into its draft without saving.
+func (m annotModel) applyProposal() (annotModel, tea.Cmd) {
+	i := m.sess.Cursor()
+	id := m.sess.Item(i).ID
+	if _, ok := m.sess.Proposal(i); !ok {
+		return m.setError("no proposal for %s", id)
+	}
+	if err := m.sess.ApplyProposal(i); err != nil {
+		return m.setError("load proposal %s: %v", id, err)
+	}
+	return m.setStatus("proposal loaded into draft — edit, then enter/u/s to save")
+}
+
+// afterMark moves on after a successful save described by what: to the next record
+// left to do in the filter, or reports the end of the filter (or of the re-check).
+func (m annotModel) afterMark(what, id string) (annotModel, tea.Cmd) {
 	if !m.sess.Advance() {
 		if m.sess.Recheck() {
 			return m.setStatus("%s %s · end of re-check in %s", what, id, m.sess.Filter())
@@ -233,7 +276,7 @@ func (m annotModel) openTypes() annotModel {
 // openFilter enters the filter picker on the active filter, counting the
 // records each filter matches.
 func (m annotModel) openFilter() annotModel {
-	filters := annotate.Filters()
+	filters := m.sess.Filters()
 	m.filters = filterChooser{counts: make([]int, len(filters))}
 	for fi, f := range filters {
 		if f == m.sess.Filter() {
@@ -367,7 +410,7 @@ func (m annotModel) updateTypes(k tea.KeyMsg) (annotModel, tea.Cmd) {
 
 // updateFilter handles annotFilter: j/k move, enter applies, esc closes.
 func (m annotModel) updateFilter(key string) (annotModel, tea.Cmd) {
-	filters := annotate.Filters()
+	filters := m.sess.Filters()
 	switch key {
 	case "esc":
 		m.mode = annotMain

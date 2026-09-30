@@ -19,6 +19,7 @@ The [example schema](../examples/annotation/schema.yaml) labels review sentiment
 ```sh
 quet annotate <queue.jsonl> --schema <schema.yaml> --out <labels.jsonl>
 quet annotate <queue.jsonl> --schema <schema.yaml> --labels <labels.jsonl>
+quet annotate <queue.jsonl> --schema <schema.yaml> (--out|--labels) <labels.jsonl> --proposals <proposals.jsonl>
 ```
 
 | Flag | Meaning |
@@ -26,14 +27,15 @@ quet annotate <queue.jsonl> --schema <schema.yaml> --labels <labels.jsonl>
 | `--schema <path>` | YAML schema: types, statuses and null-target types (required) |
 | `--out <path>` | Labels JSONL for this queue, rewritten after every mark; reopening it resumes |
 | `--labels <path>` | Existing canonical labels JSONL to [re-check a subset](#re-check-subset) of |
+| `--proposals <path>` | Optional advisory [proposals](#proposals) JSONL; read-only, works with `--out` or `--labels` |
 
 Exactly one of `--out` and `--labels` is required; giving both is an error. The queue argument and
 flags may come in any order, and `--flag value` and `--flag=value` are both accepted. A missing
 queue, a missing `--schema`, neither or both of `--out` and `--labels`, an extra argument, or a flag
 that belongs to another command prints the usage on stderr and exits with status 2. `--schema`,
-`--out` and `--labels` are rejected by every other command.
+`--out`, `--labels` and `--proposals` are rejected by every other command.
 
-The schema, queue and existing labels are loaded and validated before anything else; any problem is
+The schema, queue, existing labels and proposals are loaded and validated before anything else; any problem is
 reported as `quet: <error>` (citing the line number where there is one) with exit status 1. The
 annotation screen then needs an interactive terminal: when standard input or output is not one,
 `quet annotate` prints `quet: quet annotate needs an interactive terminal` and exits with status 1.
@@ -195,6 +197,86 @@ of them belong to the queue.
 `--out` is unchanged and stays strict: every label id must be in the queue, and the file is rewritten
 in queue order.
 
+## Proposals
+
+`--proposals <proposals.jsonl>` loads advisory suggestions, for example from a model or a script,
+and shows each next to the record's current annotation. You accept one, load it into the draft to
+edit it, or ignore it. It works with `--out` and with `--labels`:
+
+```sh
+quet annotate recheck.jsonl --schema annotation.yaml --labels labels.jsonl --proposals proposals.jsonl
+```
+
+### Format
+
+JSONL, one object per line; blank lines are skipped.
+
+```json
+{"id":"rv-002","annotation_status":"complete","type":"positive","target":{"text":"nước dùng","start":22,"end":31},"note":"praised broth","confidence":0.91,"reason":"explicit praise of the broth"}
+{"id":"rv-003","annotation_status":"uncertain","type":null,"target":null,"confidence":0.35}
+```
+
+| Member | Meaning |
+| --- | --- |
+| `id` | required, non-empty string: the queue record it is about |
+| `annotation_status` | required string |
+| `type` | optional string or `null` |
+| `target` | optional: `null` or `{"text","start","end"}`, decoded like a [label's target](#labels) |
+| `note` | optional string |
+| `confidence` | optional number from 0 to 1, shown to you and never written |
+| `reason` | optional string, shown to you and never written |
+
+Any other member is ignored, so another tool's extra fields do no harm.
+
+### Loading and validation
+
+The file is read when `quet annotate` starts, after the queue and labels, and before the terminal
+check. A problem refuses to open and is reported as `quet: proposals <path>:<line>: <error>` with
+exit status 1: invalid JSON, a missing or ill-typed `id` or `annotation_status`, a wrongly typed
+optional member, a bad `target` shape, a `confidence` outside 0 to 1, or a duplicate `id` (the error
+names the first line). The file must exist and must not be the queue file or the labels file.
+
+Proposals are **not** checked against the schema when loaded. Ids that are not in the queue are not
+an error: they are ignored, the header and startup status count them
+(`Proposals: 12 for queue · 3 ignored (not in queue)`), and after you quit Quet prints
+`quet: ignored 3 proposal(s) for ids not in the queue: a, b, c` on stderr (ten ids at most, then
+`, … (+K more)`).
+
+### On screen
+
+When the current record has a proposal, the record panel shows two sections: `Current`, the draft and
+saved status as always, and a separately styled `Proposal — not accepted` block with its type,
+target (`"text" [start,end)` or `null`), status, confidence (two decimals, or `-`), reason and note.
+The block ends with `✓ matches current` when the proposal equals the saved label, or
+`⚠ invalid: <reason>` when it would not pass the [validation](#validation) for this record's text
+(an undeclared type or status, a target that is not in the text, and so on). The footer adds
+`p accept proposal  P edit proposal`, and `?` has a Proposals section. Without `--proposals`
+nothing on screen changes.
+
+- `p` accepts the proposal: it saves exactly as marking the record with the proposal's status would
+  from a draft of the proposal's type and target, so `null_label_statuses` clearing applies. The
+  note is the proposal's when it has one, otherwise the saved note stays. The proposal is validated
+  first; an invalid one is refused with the validation error and nothing is written. Accepting goes
+  through the normal save path (`--out`, or the re-check merge writer), moves on like a mark, and
+  can be undone with `z`. It may replace an existing label: that is your explicit action, and undo
+  restores it. A record without a proposal answers `no proposal for <id>`.
+- `P` loads the proposal's type and target into the draft and saves nothing; the status line says
+  `proposal loaded into draft — edit, then enter/u/s to save`. Change the type or target as usual,
+  then mark with `enter`, `u` or `s`. It fails, with nothing changed, if the type is not declared
+  or the target is not a valid span of the text.
+- Doing neither is fine: a proposal you ignore has no effect.
+
+### Safety
+
+- The proposals file is never written.
+- Nothing is saved without `p`, `enter`, `u` or `s`. Loading proposals, moving between records and
+  `P` change no label.
+- An existing label is never overwritten automatically, only by your own `p` or mark.
+- `confidence` and `reason` are advisory and are never written to the labels file. A high
+  confidence is not ground truth: check the text.
+- [Re-check](#re-check-subset) semantics are unchanged: only queue records are editable, every other
+  label is preserved byte for byte, writes are atomic and refused if the file changed underneath.
+
 ## Filters
 
 `f` opens the filter picker:
@@ -206,6 +288,9 @@ in queue order.
 | `uncertain` | marked `uncertain` |
 | `skipped` | marked `skipped` |
 | `all` | every record, including labels with another schema status |
+| `proposed` | has a proposal (only with `--proposals`) |
+| `unproposed` | has no proposal (only with `--proposals`) |
+| `proposed uncertain` | its proposal's status is `uncertain` (only with `--proposals`) |
 
 Any saved label counts as finished: `uncertain` and `skipped` records leave `unfinished` and are
 found under their own filters. Labels with another status declared in the schema appear only under
@@ -236,6 +321,8 @@ other navigation keys ignore it.
 | `:`, `#` | [go to](#go-to) a queue position or record id |
 | `z`, `Z` | undo the last mark of this session |
 | `f` | filter picker |
+| `p` | accept the record's [proposal](#proposals) and save it (only with `--proposals`) |
+| `P` | load the record's proposal into the draft, without saving (only with `--proposals`) |
 | `?` | help |
 | `q` | quit (press twice when the current record has an unsaved draft) |
 | `ctrl+c` | quit |

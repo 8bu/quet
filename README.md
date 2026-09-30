@@ -76,15 +76,37 @@ To re-check a subset of an existing labels file, open the subset queue with `--l
 quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
 ```
 
+### Proposals
+
+`--proposals <proposals.jsonl>` adds advisory AI suggestions next to each record's current
+annotation. It works with `--out` and with `--labels`:
+
+```sh
+quet annotate recheck.jsonl --schema annotation.yaml --labels labels.jsonl --proposals proposals.jsonl
+```
+
+Each line is an object with a required `id` and `annotation_status` and optional `type`, `target`
+(`{"text","start","end"}` or `null`), `note`, `confidence` (0 to 1) and `reason`; other keys are
+ignored. Invalid lines and duplicate ids refuse to open, citing `proposals <path>:<line>`; ids that
+are not in the queue are ignored and reported on exit. The record panel shows the proposal in its
+own `Proposal — not accepted` block beside `Current`, marked `✓ matches current` or
+`⚠ invalid: …`. `p` accepts it (validated first, saved like a mark, undoable), `P` loads it into the
+draft so you can edit it and then mark with `enter`/`u`/`s`, and ignoring it does nothing. Three
+extra filters appear: `proposed`, `unproposed`, `proposed uncertain`.
+
+The proposals file is never written, nothing is saved without `p`, `enter`, `u` or `s`, an existing
+label is never overwritten automatically, `confidence` and `reason` are never written to the labels
+file, and re-check merge semantics are unchanged.
+
 See [Annotating](docs/annotating.md) and its [Re-check subset](docs/annotating.md#re-check-subset)
-section.
+and [Proposals](docs/annotating.md#proposals) sections.
 
 ## Documentation
 
 | | |
 | --- | --- |
 | [Usage](docs/usage.md) | Command line, file browser, `init`, `stats`, `update` |
-| [Annotating](docs/annotating.md) | `quet annotate`: schemas, labels output, validation, re-check subsets, span keys, offsets |
+| [Annotating](docs/annotating.md) | `quet annotate`: schemas, labels output, validation, re-check subsets, proposals, span keys, offsets |
 | [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
 | [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |

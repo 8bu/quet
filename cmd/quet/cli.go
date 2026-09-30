@@ -62,12 +62,14 @@ type command struct {
 	revert      bool
 
 	// annotate flags
-	schemaPath string
-	hasSchema  bool
-	outPath    string
-	hasOut     bool
-	labelsPath string
-	hasLabels  bool
+	schemaPath    string
+	hasSchema     bool
+	outPath       string
+	hasOut        bool
+	labelsPath    string
+	hasLabels     bool
+	proposalsPath string
+	hasProposals  bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -226,7 +228,7 @@ func splitFlag(arg string) (name, value string, hasValue bool) {
 func valueFlag(name string) bool {
 	switch name {
 	case "--filter", "--flags-file", "--config", "--status", "-o", "--output", "--format",
-		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out", "--labels":
+		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out", "--labels", "--proposals":
 		return true
 	}
 	return false
@@ -247,6 +249,8 @@ func (c *command) setValueFlag(name, value string) error {
 		c.outPath, c.hasOut = value, true
 	case "--labels":
 		c.labelsPath, c.hasLabels = value, true
+	case "--proposals":
+		c.proposalsPath, c.hasProposals = value, true
 	case "--status":
 		c.status, c.hasStatus = value, true
 	case "-o", "--output":
@@ -326,6 +330,9 @@ func (c *command) validate() error {
 		if c.hasLabels {
 			return usagef("--labels is only valid with `quet annotate`")
 		}
+		if c.hasProposals {
+			return usagef("--proposals is only valid with `quet annotate`")
+		}
 	}
 	switch c.kind {
 	case "init":
@@ -393,9 +400,10 @@ func (c *command) validate() error {
 }
 
 // validateAnnotate checks the flags of `quet annotate`: only --schema plus exactly one of
-// --out (label the queue) and --labels (re-check it against an existing labels file).
+// --out (label the queue) and --labels (re-check it against an existing labels file),
+// and optionally --proposals (advisory suggestions, combinable with either).
 func (c *command) validateAnnotate() error {
-	if err := c.validateOnly("--schema", "--out", "--labels"); err != nil {
+	if err := c.validateOnly("--schema", "--out", "--labels", "--proposals"); err != nil {
 		return err
 	}
 	if c.schemaPath == "" {
@@ -406,6 +414,9 @@ func (c *command) validateAnnotate() error {
 	}
 	if c.outPath == "" && c.labelsPath == "" {
 		return usagef("`quet annotate` needs --out <labels.jsonl> or --labels <labels.jsonl>")
+	}
+	if c.hasProposals && c.proposalsPath == "" {
+		return usagef("`quet annotate` needs a file for --proposals <proposals.jsonl>")
 	}
 	return nil
 }
@@ -510,5 +521,6 @@ func (c *command) givenFlags() []string {
 	add(c.hasSchema, "--schema")
 	add(c.hasOut, "--out")
 	add(c.hasLabels, "--labels")
+	add(c.hasProposals, "--proposals")
 	return flags
 }

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -59,13 +61,35 @@ type annotModel struct {
 	gotoQuery []rune // annotGoto input: a 1-based queue position or a record id
 }
 
-// newAnnotModel returns the annotation model over s.
+// newAnnotModel returns the annotation model over s. A session with proposals starts
+// with a status line summarising them.
 func newAnnotModel(s *annotate.Session) annotModel {
-	return annotModel{sess: s, mode: annotMain, width: 100, height: 30}
+	m := annotModel{sess: s, mode: annotMain, width: 100, height: 30}
+	if s.HasProposals() {
+		m.status = proposalSummary(s)
+		m.statusSeq = 1
+	}
+	return m
 }
 
-// Init implements tea.Model.
-func (m annotModel) Init() tea.Cmd { return nil }
+// proposalSummary says how many proposals apply to the queue and how many ids of the
+// proposals file were ignored because they are not in it.
+func proposalSummary(s *annotate.Session) string {
+	summary := fmt.Sprintf("Proposals: %d for queue", s.ProposalCount())
+	if n := len(s.IgnoredProposals()); n > 0 {
+		summary += fmt.Sprintf(" · %d ignored (not in queue)", n)
+	}
+	return summary
+}
+
+// Init implements tea.Model: a startup status line is cleared after the usual delay.
+func (m annotModel) Init() tea.Cmd {
+	if m.status == "" {
+		return nil
+	}
+	seq := m.statusSeq
+	return tea.Tick(statusTTL, func(time.Time) tea.Msg { return statusExpireMsg{seq: seq} })
+}
 
 // Update implements tea.Model.
 func (m annotModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -97,7 +121,7 @@ func (p typeChooser) matches(types []annotate.TypeDef) []int {
 }
 
 // filterChooser is the state of the filter picker: the cursor into
-// annotate.Filters() and the per-filter record counts taken when it opened.
+// m.sess.Filters() and the per-filter record counts taken when it opened.
 type filterChooser struct {
 	cursor int
 	counts []int

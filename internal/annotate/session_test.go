@@ -737,10 +737,11 @@ func TestSessionSpeed(t *testing.T) {
 }
 
 func TestFilters(t *testing.T) {
+	s := newFixture(t, "").open(t)
 	var names []string
-	for _, f := range Filters() {
+	for _, f := range s.Filters() {
 		names = append(names, f.String())
-		got, err := ParseFilter(strings.ToUpper(f.String()))
+		got, err := s.ParseFilter(strings.ToUpper(f.String()))
 		if err != nil || got != f {
 			t.Errorf("ParseFilter(%q) = %v, %v", f.String(), got, err)
 		}
@@ -748,8 +749,10 @@ func TestFilters(t *testing.T) {
 	if want := []string{"unfinished", "complete", "uncertain", "skipped", "all"}; !reflect.DeepEqual(names, want) {
 		t.Errorf("Filters() = %v, want %v", names, want)
 	}
-	if _, err := ParseFilter("done"); err == nil {
-		t.Error("ParseFilter accepted an unknown filter")
+	for _, name := range []string{"done", "proposed"} {
+		if _, err := s.ParseFilter(name); err == nil {
+			t.Errorf("ParseFilter(%q) accepted a filter the session does not have", name)
+		}
 	}
 }
 
