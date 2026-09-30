@@ -133,7 +133,8 @@ func readLabelLines(t *testing.T, path string) []string {
 	return lines
 }
 
-// readLabels parses the labels file keyed by id.
+// readLabels parses the labels file keyed by id, failing on a duplicate id:
+// revising a label must rewrite its line, never append another.
 func readLabels(t *testing.T, path string) map[string]annotate.Label {
 	t.Helper()
 	out := map[string]annotate.Label{}
@@ -141,6 +142,9 @@ func readLabels(t *testing.T, path string) map[string]annotate.Label {
 		var l annotate.Label
 		if err := json.Unmarshal([]byte(line), &l); err != nil {
 			t.Fatalf("parse label %q: %v", line, err)
+		}
+		if _, dup := out[l.ID]; dup {
+			t.Fatalf("labels file has id %q twice", l.ID)
 		}
 		out[l.ID] = l
 	}
@@ -417,6 +421,180 @@ func TestAnnotateEscDiscardsDraft(t *testing.T) {
 	}
 }
 
+// labelType returns the type of l, or "" when it is null.
+func labelType(l annotate.Label) string {
+	if l.Type == nil {
+		return ""
+	}
+	return *l.Type
+}
+
+func TestAnnotateReviseComplete(t *testing.T) {
+	m, out := annotTestModel(t)
+	m, _ = sendAnnot(m, keys(typed("4xww"), []tea.Msg{enterKey, enterKey})...)
+	if m.sess.Cursor() != 1 {
+		t.Fatalf("cursor after complete = %d, want 1", m.sess.Cursor())
+	}
+	m, _ = sendAnnot(m, runeKey('a'))
+	if m.sess.Cursor() != 0 {
+		t.Fatalf("a from r2 went to %d, want the labeled r1", m.sess.Cursor())
+	}
+	v := m.View()
+	for _, want := range []string{"Record 1 / 5 · ✓ complete", "Saved: complete", "Type: lend", `Target: "Nam" [8,11)`} {
+		if !strings.Contains(v, want) {
+			t.Errorf("revisited r1 view lacks %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "unsaved draft") {
+		t.Errorf("clean revisit shows the unsaved-draft marker")
+	}
+	m, _ = sendAnnot(m, keys([]tea.Msg{runeKey('t')}, typed("bor"), []tea.Msg{enterKey})...)
+	if v := m.View(); !strings.Contains(v, "unsaved draft") || !strings.Contains(v, "✓ complete") {
+		t.Errorf("edited revisit lacks the draft marker or saved badge:\n%s", v)
+	}
+	m, _ = sendAnnot(m, enterKey)
+	if m.status != "revised complete r1" {
+		t.Errorf("status = %q, want %q", m.status, "revised complete r1")
+	}
+	labels := readLabels(t, out)
+	got := labels["r1"]
+	if len(labels) != 1 || got.Status != annotate.StatusComplete || labelType(got) != "borrow" ||
+		got.Target == nil || got.Target.Text != "Nam" {
+		t.Fatalf("labels = %+v, want only r1 complete borrow keeping target Nam", labels)
+	}
+}
+
+func TestAnnotateReviseUncertainToComplete(t *testing.T) {
+	m, out := annotTestModel(t)
+	m, _ = sendAnnot(m, runeKey('u'), runeKey('a'))
+	if m.sess.Cursor() != 0 || !strings.Contains(m.View(), "? uncertain") {
+		t.Fatalf("cursor %d, want r1 showing ? uncertain:\n%s", m.sess.Cursor(), m.View())
+	}
+	m, _ = sendAnnot(m, runeKey('1'), enterKey)
+	labels := readLabels(t, out)
+	if got := labels["r1"]; len(labels) != 1 || got.Status != annotate.StatusComplete || labelType(got) != "expense" {
+		t.Fatalf("labels = %+v, want only r1 complete expense", labels)
+	}
+	if m.status != "revised complete r1" {
+		t.Errorf("status = %q, want %q", m.status, "revised complete r1")
+	}
+}
+
+func TestAnnotateReviseSkippedToUncertain(t *testing.T) {
+	m, out := annotTestModel(t)
+	m, _ = sendAnnot(m, runeKey('s'), runeKey('H'))
+	if m.sess.Cursor() != 0 || !strings.Contains(m.View(), "– skipped") {
+		t.Fatalf("cursor %d, want r1 showing – skipped:\n%s", m.sess.Cursor(), m.View())
+	}
+	m, _ = sendAnnot(m, runeKey('2'), runeKey('u'))
+	labels := readLabels(t, out)
+	if got := labels["r1"]; len(labels) != 1 || got.Status != annotate.StatusUncertain || labelType(got) != "income" {
+		t.Fatalf("labels = %+v, want only r1 uncertain income", labels)
+	}
+}
+
+func TestAnnotateUndo(t *testing.T) {
+	m, out := annotTestModel(t)
+	m, _ = sendAnnot(m, runeKey('4'), enterKey, runeKey('a'), runeKey('1'), runeKey('u'))
+	if got := readLabels(t, out)["r1"]; got.Status != annotate.StatusUncertain || labelType(got) != "expense" {
+		t.Fatalf("revised r1 = %+v, want uncertain expense", got)
+	}
+	m, _ = sendAnnot(m, runeKey('z'))
+	if m.status != "undo: restored complete r1" || m.sess.Cursor() != 0 {
+		t.Fatalf("status %q cursor %d, want restored complete on r1", m.status, m.sess.Cursor())
+	}
+	labels := readLabels(t, out)
+	if got := labels["r1"]; len(labels) != 1 || got.Status != annotate.StatusComplete || labelType(got) != "lend" {
+		t.Fatalf("labels after undo = %+v, want only r1 complete lend", labels)
+	}
+	m, _ = sendAnnot(m, runeKey('Z'))
+	if m.status != "undo: removed label r1" {
+		t.Fatalf("status = %q, want the label removed", m.status)
+	}
+	if labels := readLabels(t, out); len(labels) != 0 {
+		t.Fatalf("labels after second undo = %+v, want none", labels)
+	}
+	if v := m.View(); !strings.Contains(v, "Status: unfinished") || strings.Contains(v, "Saved:") {
+		t.Errorf("r1 still shows a saved label after undo:\n%s", v)
+	}
+	m, _ = sendAnnot(m, runeKey('z'))
+	if m.status != "nothing to undo" || m.statusErr {
+		t.Fatalf("status = %q err %v, want nothing to undo", m.status, m.statusErr)
+	}
+}
+
+func TestAnnotateGoTo(t *testing.T) {
+	m, _ := annotTestModel(t)
+	m, _ = sendAnnot(m, runeKey(':'))
+	if m.mode != annotGoto || !strings.Contains(m.View(), "enter go") {
+		t.Fatalf("mode = %d, want the go-to prompt with its footer:\n%s", m.mode, m.View())
+	}
+	m, _ = sendAnnot(m, runeKey('3'), enterKey)
+	if m.mode != annotMain || m.sess.Cursor() != 2 {
+		t.Fatalf("mode %d cursor %d, want main on index 2", m.mode, m.sess.Cursor())
+	}
+
+	// q and ? are query text; a bad id keeps the prompt open with the error.
+	m, _ = sendAnnot(m, keys(typed(":q?"), []tea.Msg{specialKey(tea.KeyBackspace), specialKey(tea.KeyBackspace)},
+		typed("nope"), []tea.Msg{specialKey(tea.KeyDown), enterKey})...)
+	if m.mode != annotGoto || !m.statusErr || !strings.Contains(m.View(), `go to: no record with id "nope"`) {
+		t.Fatalf("bad id: mode %d err %v, want the prompt open with an error:\n%s", m.mode, m.statusErr, m.View())
+	}
+	if m.sess.Cursor() != 2 {
+		t.Fatalf("bad id moved the cursor to %d", m.sess.Cursor())
+	}
+	m, _ = sendAnnot(m, escKey)
+	if m.mode != annotMain || m.sess.Cursor() != 2 {
+		t.Fatalf("esc: mode %d cursor %d, want main on index 2", m.mode, m.sess.Cursor())
+	}
+
+	m, _ = sendAnnot(m, runeKey('#'))
+	if m.mode != annotGoto || len(m.gotoQuery) != 0 {
+		t.Fatalf("# opened mode %d with query %q, want an empty prompt", m.mode, string(m.gotoQuery))
+	}
+	m, _ = sendAnnot(m, keys(typed("r5"), []tea.Msg{enterKey})...)
+	if m.mode != annotMain || m.sess.Cursor() != 4 {
+		t.Fatalf("id r5: mode %d cursor %d, want main on index 4", m.mode, m.sess.Cursor())
+	}
+}
+
+func TestAnnotateNavigation(t *testing.T) {
+	m, _ := annotTestModel(t)
+	// Label r1 and r2: the unfinished filter now matches r3..r5 only.
+	m, _ = sendAnnot(m, runeKey('4'), enterKey, runeKey('1'), enterKey)
+	if m.sess.Cursor() != 2 {
+		t.Fatalf("cursor = %d, want 2", m.sess.Cursor())
+	}
+	steps := []struct {
+		key    tea.Msg
+		cursor int
+		status string
+	}{
+		{runeKey(']'), 3, ""},
+		{runeKey('['), 2, ""},
+		{runeKey('['), 2, "no previous unfinished record"},
+		{runeKey('a'), 1, ""},
+		{specialKey(tea.KeyLeft), 0, ""},
+		{runeKey('h'), 0, "first record"},
+		{runeKey(']'), 2, ""},
+		{runeKey('G'), 4, ""},
+		{runeKey(']'), 4, "no next unfinished record"},
+		{runeKey('d'), 4, "last record"},
+		{runeKey('g'), 0, ""},
+		{runeKey('D'), 1, ""},
+		{runeKey('L'), 2, ""},
+		{specialKey(tea.KeyRight), 3, ""},
+		{runeKey('A'), 2, ""},
+	}
+	for i, st := range steps {
+		m.status = ""
+		m, _ = sendAnnot(m, st.key)
+		if m.sess.Cursor() != st.cursor || m.status != st.status {
+			t.Fatalf("step %d (%v): cursor %d status %q, want %d %q", i, st.key, m.sess.Cursor(), m.status, st.cursor, st.status)
+		}
+	}
+}
+
 func TestAnnotateHelpOverlay(t *testing.T) {
 	m, _ := annotTestModel(t)
 	m, _ = sendAnnot(m, tea.WindowSizeMsg{Width: 160, Height: 60}, runeKey('?'))
@@ -425,7 +603,8 @@ func TestAnnotateHelpOverlay(t *testing.T) {
 	}
 	v := m.View()
 	for _, want := range []string{"Label", "Navigate", "Target span", "Type picker", "Other",
-		"Null target", "Extend to word", "Fuzzy filter", "Discard draft", "Quit; twice if unsaved"} {
+		"Null target", "Extend to word", "Fuzzy filter", "Discard draft", "Quit; twice if unsaved",
+		"Undo last save", "Edit, then enter/u/s", "Previous, any status", "Prev/next in filter", "Go to position or id"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("help lacks %q", want)
 		}
@@ -446,12 +625,14 @@ func TestAnnotateHelpOverlay(t *testing.T) {
 
 func TestAnnotateViewSizes(t *testing.T) {
 	setups := map[string][]tea.Msg{
-		"main":   nil,
-		"span":   typed("x"),
-		"types":  typed("t"),
-		"filter": typed("f"),
-		"help":   typed("?"),
-		"draft":  keys(typed("4x"), []tea.Msg{enterKey}),
+		"main":    nil,
+		"span":    typed("x"),
+		"types":   typed("t"),
+		"filter":  typed("f"),
+		"help":    typed("?"),
+		"draft":   keys(typed("4x"), []tea.Msg{enterKey}),
+		"goto":    typed(":12"),
+		"revisit": keys(typed("4"), []tea.Msg{enterKey}, typed("a8")),
 	}
 	sizes := [][2]int{{80, 24}, {0, 0}, {1, 1}, {2, 2}, {3, 3}, {10, 4}, {20, 6}, {40, 10}, {200, 3}}
 	for name, setup := range setups {

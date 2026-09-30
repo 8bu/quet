@@ -121,6 +121,25 @@ After a successful mark the cursor moves to the next record in the current filte
 the queue); under the `unfinished` and `all` filters it skips records that already have a label. When
 nothing is left, the status line says `all records in <filter> are done`.
 
+## Revising labels
+
+Every record stays reachable after it is labelled: `a` / `d` (and `h` / `l`, `←` / `→`) step
+through the whole queue in order, whatever the filter, so going back with `a` right after a mark
+lands on the record you just labelled. `:` or `#` jumps straight to a queue position or record id,
+and the `complete`, `uncertain` and `skipped` filters list labelled records by status.
+
+A labelled record shows its saved status in the record panel title (`Record 12 / 600 · ✓ complete`,
+`? uncertain`, `– skipped`, other statuses by name) and a `Saved:` line under its type and target.
+To revise it, change the type or target with `t`, `1`–`9`, `x` or `n`, then save again with
+`enter`, `u` or `s`; saving under a new status without edits just changes the status. The label is
+replaced in place, so the labels file never holds an id twice, and the status line reads
+`revised <status> <id>`.
+
+`z` undoes the most recent mark of the session: the record gets back the label it had before (or
+loses its label if it had none), the labels file is rewritten, and the cursor moves to it. Pressing
+`z` again undoes the mark before that, down to the start of the session; then the status line says
+`nothing to undo`. Undo does not reach marks from earlier sessions.
+
 ## Filters
 
 `f` opens the filter picker:
@@ -138,7 +157,8 @@ found under their own filters. Labels with another status declared in the schema
 `all`.
 
 Switching filters moves the cursor to the first matching record at or after it, and leaves it where
-it is when nothing matches.
+it is when nothing matches. `[` and `]` move to the previous and next record in the filter; the
+other navigation keys ignore it.
 
 ## Keys
 
@@ -154,15 +174,31 @@ it is when nothing matches.
 | `x` | select the target span ([span mode](#span-mode)) |
 | `n` | null target |
 | `esc` | discard the unsaved draft |
-| `a`, `←`, `h` | previous record |
-| `d`, `→`, `l` | next record |
-| `g` / `G` | first / last record |
+| `a`, `A`, `h`, `H`, `←` | previous record in queue order, labelled or not |
+| `d`, `D`, `l`, `L`, `→` | next record in queue order, labelled or not |
+| `[` / `]` | previous / next record in the current filter |
+| `g` / `G` | first / last record in the queue |
+| `:`, `#` | [go to](#go-to) a queue position or record id |
+| `z`, `Z` | undo the last mark of this session |
 | `f` | filter picker |
 | `?` | help |
 | `q` | quit (press twice when the current record has an unsaved draft) |
 | `ctrl+c` | quit |
 
-Choosing a null-target type clears the draft's target. The source text is never editable.
+Choosing a null-target type clears the draft's target. The source text is never editable. At either
+end of the queue `a` and `d` stay put and say `first record` or `last record`.
+
+### Go to
+
+Opened with `:` or `#`. Type a 1-based queue position (`12`) or an exact record id (`rv-002`);
+surrounding spaces are ignored and a number is read as a position first.
+
+| Key | Action |
+| --- | --- |
+| typing | edit the query (every printable key is text, including `q` and `?`) |
+| `backspace` | delete the last character |
+| `enter` | jump; an unknown position or id shows an error and keeps the prompt open |
+| `esc` | cancel |
 
 ### Type picker
 

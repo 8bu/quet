@@ -81,7 +81,8 @@ Keys:
   e edit   f flags   c config   / search   tab change panel   1/2/3 panel
   ? help   esc back/close   enter select   : commands   q quit
   annotate: enter complete   u uncertain   s skip   t/1-9 type   x span
-    n null target   esc discard   f filter   a/d prev/next   ? help   q quit
+    n null target   esc discard   a/d prev/next (any record)   [/] in filter
+    g/G first/last   : or # go to   z undo   f filter   ? help   q quit
 
 Data stays local: no telemetry; the network is only used by quet update or
 when update.check is on.

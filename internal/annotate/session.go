@@ -6,11 +6,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// Filter selects which queue records navigation visits.
+// Filter selects which queue records filtered navigation (PrevMatch, NextMatch, Advance, SetFilter) visits.
 type Filter int
 
 // Filters in display order.
@@ -59,7 +60,7 @@ type Draft struct {
 type Counts struct{ Total, Complete, Uncertain, Skipped, Other, Remaining int }
 
 // Session is an annotation session over a queue: saved labels (persisted to the out file), per-record drafts,
-// filter and cursor. It never writes the queue file.
+// filter, cursor and the undo stack of this session's marks. It never writes the queue file.
 type Session struct {
 	schema    *Schema
 	queuePath string
@@ -67,11 +68,19 @@ type Session struct {
 	items     []Item
 	labels    map[string]Label // saved labels by id
 	drafts    map[int]Draft    // pending edits by queue index; only entries differing from the saved values
+	undo      []undoEntry      // successful marks of this session, most recent last
 	filter    Filter
 	cursor    int
 	marked    int
 	now       func() time.Time
 	start     time.Time
+}
+
+// undoEntry records the saved label a successful Mark replaced: prev is meaningful only when had is true.
+type undoEntry struct {
+	index int   // queue index of the marked record
+	had   bool  // the record had a saved label before the mark
+	prev  Label // that label (Target copied)
 }
 
 // Open loads schema, queue and existing labels (resume). Errors: any load error; an empty queue; outPath resolving
@@ -263,8 +272,9 @@ func (s *Session) ClearTarget(i int) {
 }
 
 // Mark saves the draft as a label with status: builds Label (existing Note preserved), Validate, write file
-// atomically; on write failure the in-memory label is restored. Success: draft dropped, session mark count +1.
-// Does NOT move the cursor.
+// atomically; on write failure the in-memory label is restored. Success: draft dropped, session mark count +1,
+// the replaced label (or its absence) pushed on the undo stack. An existing label is overwritten in place, so the
+// file keeps one line per id. Does NOT move the cursor.
 func (s *Session) Mark(i int, status string) error {
 	if !s.schema.HasStatus(status) {
 		return fmt.Errorf("status %q is not declared in the schema", status)
@@ -281,16 +291,54 @@ func (s *Session) Mark(i int, status string) error {
 	}
 	s.labels[item.ID] = l
 	if err := WriteLabels(s.outPath, s.items, s.labels); err != nil {
-		if had {
-			s.labels[item.ID] = prev
-		} else {
-			delete(s.labels, item.ID)
-		}
+		s.restoreLabel(item.ID, had, prev)
 		return err
 	}
+	prev.Target = copyTarget(prev.Target)
+	s.undo = append(s.undo, undoEntry{index: i, had: had, prev: prev})
 	delete(s.drafts, i)
 	s.marked++
 	return nil
+}
+
+// restoreLabel sets the saved label of id to prev when had, else removes it (in memory only).
+func (s *Session) restoreLabel(id string, had bool, prev Label) {
+	if had {
+		s.labels[id] = prev
+	} else {
+		delete(s.labels, id)
+	}
+}
+
+// CanUndo reports whether Undo has a mark to revert.
+func (s *Session) CanUndo() bool { return len(s.undo) > 0 }
+
+// Undo reverts the most recent successful Mark of this session not yet undone: restores the record's previous saved
+// label (or removes it if it had none), rewrites the labels file atomically, drops the record's draft, moves the
+// cursor to it and decrements the session mark count (not below 0). Returns the record's queue index and a short
+// description ("restored <status>" or "removed label"); ok=false when there is nothing to undo. On write failure
+// the in-memory state is left as before the Undo, the entry stays on the stack and err is returned.
+func (s *Session) Undo() (index int, desc string, ok bool, err error) {
+	if len(s.undo) == 0 {
+		return 0, "", false, nil
+	}
+	e := s.undo[len(s.undo)-1]
+	id := s.items[e.index].ID
+	cur, curHad := s.labels[id]
+	s.restoreLabel(id, e.had, e.prev)
+	if err := WriteLabels(s.outPath, s.items, s.labels); err != nil {
+		s.restoreLabel(id, curHad, cur)
+		return e.index, "", false, err
+	}
+	s.undo = s.undo[:len(s.undo)-1]
+	delete(s.drafts, e.index)
+	s.cursor = e.index
+	s.marked = max(0, s.marked-1)
+	desc = "removed label"
+	if e.had {
+		desc = "restored " + e.prev.Status
+	}
+	return e.index, desc, true, nil
 }
 
 // Counts summarises the saved labels.
@@ -360,8 +408,68 @@ func (s *Session) SetCursor(i int) {
 	s.cursor = max(0, min(i, len(s.items)-1))
 }
 
-// Next moves to the next record matching the filter after the cursor; false at the end (no wrap).
+// Find resolves a jump query (trimmed) to a queue index: a 1-based queue position, else an exact record id.
+// Error when neither matches.
+func (s *Session) Find(query string) (int, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return 0, errors.New("enter a queue position or record id")
+	}
+	n, numErr := strconv.Atoi(q)
+	if numErr == nil && n >= 1 && n <= len(s.items) {
+		return n - 1, nil
+	}
+	for i, it := range s.items {
+		if it.ID == q {
+			return i, nil
+		}
+	}
+	if numErr == nil {
+		return 0, fmt.Errorf("no record %d: the queue has %d", n, len(s.items))
+	}
+	return 0, fmt.Errorf("no record with id %q", q)
+}
+
+// Next moves to the next record in queue order, ignoring the filter; false at the end (no wrap, cursor unchanged).
 func (s *Session) Next() bool {
+	if s.cursor+1 >= len(s.items) {
+		return false
+	}
+	s.cursor++
+	return true
+}
+
+// Prev moves to the previous record in queue order, ignoring the filter; false at the start (no wrap, cursor
+// unchanged).
+func (s *Session) Prev() bool {
+	if s.cursor <= 0 {
+		return false
+	}
+	s.cursor--
+	return true
+}
+
+// First moves to the first queue record, ignoring the filter; false only when the queue is empty.
+func (s *Session) First() bool {
+	if len(s.items) == 0 {
+		return false
+	}
+	s.cursor = 0
+	return true
+}
+
+// Last moves to the last queue record, ignoring the filter; false only when the queue is empty.
+func (s *Session) Last() bool {
+	if len(s.items) == 0 {
+		return false
+	}
+	s.cursor = len(s.items) - 1
+	return true
+}
+
+// NextMatch moves to the next record matching the filter after the cursor; false (cursor unchanged) when none
+// (no wrap).
+func (s *Session) NextMatch() bool {
 	for j := s.cursor + 1; j < len(s.items); j++ {
 		if s.Matches(j, s.filter) {
 			s.cursor = j
@@ -371,31 +479,10 @@ func (s *Session) Next() bool {
 	return false
 }
 
-// Prev moves to the previous record matching the filter before the cursor; false at the start (no wrap).
-func (s *Session) Prev() bool {
+// PrevMatch moves to the previous record matching the filter before the cursor; false (cursor unchanged) when none
+// (no wrap).
+func (s *Session) PrevMatch() bool {
 	for j := s.cursor - 1; j >= 0; j-- {
-		if s.Matches(j, s.filter) {
-			s.cursor = j
-			return true
-		}
-	}
-	return false
-}
-
-// First moves to the first record matching the filter; false (cursor unchanged) if none match.
-func (s *Session) First() bool {
-	for j := range s.items {
-		if s.Matches(j, s.filter) {
-			s.cursor = j
-			return true
-		}
-	}
-	return false
-}
-
-// Last moves to the last record matching the filter; false (cursor unchanged) if none match.
-func (s *Session) Last() bool {
-	for j := len(s.items) - 1; j >= 0; j-- {
 		if s.Matches(j, s.filter) {
 			s.cursor = j
 			return true

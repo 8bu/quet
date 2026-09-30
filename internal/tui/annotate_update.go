@@ -33,11 +33,14 @@ func (m annotModel) updateKey(k tea.KeyMsg) (annotModel, tea.Cmd) {
 		return m, tea.Quit
 	}
 	// Pasted text and bursts of runes are never commands; only the type
-	// picker's query accepts them.
+	// picker's query and the go-to prompt accept them.
 	if k.Paste || (k.Type == tea.KeyRunes && len(k.Runes) > 1) {
-		if m.mode == annotTypes {
+		switch m.mode {
+		case annotTypes:
 			m.types.query = append(m.types.query, k.Runes...)
 			m.types.cursor = 0
+		case annotGoto:
+			m.gotoQuery = append(m.gotoQuery, k.Runes...)
 		}
 		return m, nil
 	}
@@ -50,6 +53,8 @@ func (m annotModel) updateKey(k tea.KeyMsg) (annotModel, tea.Cmd) {
 		return m.updateFilter(k.String())
 	case annotHelp:
 		return m.updateHelp(k.String())
+	case annotGoto:
+		return m.updateGoto(k)
 	default:
 		return m.updateMain(k.String())
 	}
@@ -111,14 +116,24 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 		}
 		m.sess.DiscardDraft(i)
 		return m.setStatus("draft discarded")
-	case "a", "h", "left":
+	case "a", "A", "h", "H", "left":
 		if !m.sess.Prev() {
-			return m.setStatus("no previous record in %s", m.sess.Filter())
+			return m.setStatus("first record")
 		}
 		return m, nil
-	case "d", "l", "right":
+	case "d", "D", "l", "L", "right":
 		if !m.sess.Next() {
-			return m.setStatus("no next record in %s", m.sess.Filter())
+			return m.setStatus("last record")
+		}
+		return m, nil
+	case "[":
+		if !m.sess.PrevMatch() {
+			return m.setStatus("no previous %s record", m.sess.Filter())
+		}
+		return m, nil
+	case "]":
+		if !m.sess.NextMatch() {
+			return m.setStatus("no next %s record", m.sess.Filter())
 		}
 		return m, nil
 	case "g":
@@ -126,6 +141,12 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 		return m, nil
 	case "G":
 		m.sess.Last()
+		return m, nil
+	case "z", "Z":
+		return m.undo()
+	case ":", "#":
+		m.gotoQuery = nil
+		m.mode = annotGoto
 		return m, nil
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		n := int(key[0] - '0')
@@ -139,20 +160,37 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 }
 
 // mark saves the current draft with status, then advances to the next record
-// left to do in the filter.
+// left to do in the filter. Re-marking a labeled record reports a revision.
 func (m annotModel) mark(status string) (annotModel, tea.Cmd) {
 	if !m.sess.Schema().HasStatus(status) {
 		return m.setError("status %q is not declared in the schema", status)
 	}
 	i := m.sess.Cursor()
 	id := m.sess.Item(i).ID
+	_, had := m.sess.Label(i)
 	if err := m.sess.Mark(i, status); err != nil {
 		return m.setError("%s %s: %v", status, id, err)
 	}
-	if !m.sess.Advance() {
-		return m.setStatus("%s %s · all records in %s are done", status, id, m.sess.Filter())
+	what := status
+	if had {
+		what = "revised " + status
 	}
-	return m.setStatus("%s %s", status, id)
+	if !m.sess.Advance() {
+		return m.setStatus("%s %s · all records in %s are done", what, id, m.sess.Filter())
+	}
+	return m.setStatus("%s %s", what, id)
+}
+
+// undo reverts the session's most recent mark and reports what it restored.
+func (m annotModel) undo() (annotModel, tea.Cmd) {
+	i, desc, ok, err := m.sess.Undo()
+	if err != nil {
+		return m.setError("undo: %v", err)
+	}
+	if !ok {
+		return m.setStatus("nothing to undo")
+	}
+	return m.setStatus("undo: %s %s", desc, m.sess.Item(i).ID)
 }
 
 // applyType sets the current draft's type, reporting a target it cleared.
@@ -347,6 +385,36 @@ func (m annotModel) updateFilter(key string) (annotModel, tea.Cmd) {
 			return m.setStatus("filter %s %d/%d", f, pos, n)
 		}
 		return m.setStatus("filter %s: no matching records", f)
+	}
+	return m, nil
+}
+
+// updateGoto handles annotGoto: edit the query, enter jumps (the prompt stays
+// open on a bad query), esc cancels. Non-printable keys are ignored.
+func (m annotModel) updateGoto(k tea.KeyMsg) (annotModel, tea.Cmd) {
+	switch k.String() {
+	case "esc":
+		m.mode = annotMain
+		return m, nil
+	case "enter":
+		i, err := m.sess.Find(string(m.gotoQuery))
+		if err != nil {
+			return m.setError("go to: %v", err)
+		}
+		m.sess.SetCursor(i)
+		m.mode = annotMain
+		return m.setStatus("record %d / %d · %s", i+1, m.sess.Len(), m.sess.Item(i).ID)
+	case "backspace":
+		if len(m.gotoQuery) > 0 {
+			m.gotoQuery = m.gotoQuery[:len(m.gotoQuery)-1]
+		}
+		return m, nil
+	}
+	switch k.Type {
+	case tea.KeyRunes:
+		m.gotoQuery = append(m.gotoQuery, k.Runes...)
+	case tea.KeySpace:
+		m.gotoQuery = append(m.gotoQuery, ' ')
 	}
 	return m, nil
 }

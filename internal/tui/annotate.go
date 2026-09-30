@@ -31,6 +31,8 @@ const (
 	annotFilter
 	// annotHelp shows the keyboard reference overlay.
 	annotHelp
+	// annotGoto reads a queue position or record id to jump to.
+	annotGoto
 )
 
 // annotModel is the Bubble Tea model of annotation mode. It is separate from
@@ -53,6 +55,8 @@ type annotModel struct {
 	types   typeChooser
 	filters filterChooser
 	span    spanSel
+
+	gotoQuery []rune // annotGoto input: a 1-based queue position or a record id
 }
 
 // newAnnotModel returns the annotation model over s.

@@ -89,6 +89,9 @@ func (m annotModel) body(w, h int) string {
 	case annotHelp:
 		ow := min(w, annotHelpMaxWidth)
 		return overlayBox("Help", w, h, ow, m.helpContent(ow-2, h-2), -1)
+	case annotGoto:
+		ow := min(w, 48)
+		return overlayBox("Go to", w, h, ow, m.gotoContent(ow-2), -1)
 	}
 	header := m.headerRows()
 	headH := len(header) + 2
@@ -165,11 +168,39 @@ func (m annotModel) recordBox(w, h int) string {
 		text = text[start:end]
 	}
 	title := fmt.Sprintf("Record %d / %d", i+1, m.sess.Len())
+	if l, ok := m.sess.Label(i); ok {
+		title += " · " + statusBadge(l.Status)
+	}
 	return box(title, true, w, h, append(text, extras...), -1)
 }
 
+// statusBadge renders a saved annotation status with its mark: ✓ complete,
+// ? uncertain, – skipped; other schema statuses by name alone.
+func statusBadge(status string) string {
+	switch status {
+	case annotate.StatusComplete:
+		return "✓ " + status
+	case annotate.StatusUncertain:
+		return "? " + status
+	case annotate.StatusSkipped:
+		return "– " + status
+	}
+	return status
+}
+
+// gotoContent renders the go-to prompt: the query line and what it accepts.
+func (m annotModel) gotoContent(iw int) []string {
+	iw = max(iw, 1)
+	query := styleAccent.Render("› ") + string(m.gotoQuery)
+	if len(m.gotoQuery) == 0 {
+		query += styleMuted.Render("position or id")
+	}
+	hint := fmt.Sprintf("1-%d or an exact record id", m.sess.Len())
+	return []string{truncateLine(query, iw), styleMuted.Render(truncateLine(hint, iw))}
+}
+
 // metaLines renders the draft type and target, the saved status, the record
-// id and the unsaved-draft marker.
+// id, the revisit notice of a labeled record and the unsaved-draft marker.
 func (m annotModel) metaLines(i int, d annotate.Draft) []string {
 	typ := "Type: -"
 	if d.Type != "" {
@@ -185,10 +216,14 @@ func (m annotModel) metaLines(i int, d annotate.Draft) []string {
 		target = fmt.Sprintf("Target: %q [%d,%d)", d.Target.Text, d.Target.Start, d.Target.End)
 	}
 	status := "Status: unfinished"
-	if l, ok := m.sess.Label(i); ok {
+	l, labeled := m.sess.Label(i)
+	if labeled {
 		status = "Status: " + l.Status
 	}
 	lines := []string{typ, target, status, styleMuted.Render("ID: " + m.sess.Item(i).ID)}
+	if labeled {
+		lines = append(lines, styleAccent.Render("Saved: "+l.Status+" — edit with t/x/n, resave with enter/u/s"))
+	}
 	if m.sess.Dirty(i) {
 		lines = append(lines, styleAccent.Render("● unsaved draft — enter/u/s to save, esc to discard"))
 	}
@@ -402,12 +437,15 @@ func annotHelpGroups() []helpGroup {
 			{"x", "Select target span"},
 			{"n", "Null target"},
 			{"esc", "Discard draft"},
+			{"z", "Undo last save"},
+			{"revise", "Edit, then enter/u/s"},
 		}},
 		{"Navigate", []helpItem{
-			{"a/h/←", "Previous"},
-			{"d/l/→", "Next"},
-			{"g", "First"},
-			{"G", "Last"},
+			{"a/h/←", "Previous, any status"},
+			{"d/l/→", "Next, any status"},
+			{"[/]", "Prev/next in filter"},
+			{"g/G", "First/last record"},
+			{": #", "Go to position or id"},
 			{"f", "Filter"},
 		}},
 		{"Target span", []helpItem{
@@ -452,8 +490,11 @@ func (m annotModel) footerItems() []string {
 		return []string{"j/k move", "enter apply", "esc close"}
 	case annotHelp:
 		return []string{"j/k scroll", "esc close"}
+	case annotGoto:
+		return []string{"type position or id", "enter go", "esc cancel"}
 	default:
-		return []string{"t type", "x target", "n null", "enter complete", "u uncertain", "s skip", "a/d prev/next", "f filter", "? help", "q quit"}
+		return []string{"t type", "x target", "n null", "enter complete", "u uncertain", "s skip", "a/d prev/next",
+			"[/] prev/next " + m.sess.Filter().String(), "z undo", ": go to", "f filter", "? help", "q quit"}
 	}
 }
 

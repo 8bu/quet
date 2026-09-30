@@ -2,6 +2,7 @@ package annotate
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -520,14 +521,12 @@ func TestSessionNavigation(t *testing.T) {
 		ok   bool
 		want int
 	}{
-		{"next", s.Next, true, 3},
-		{"next", s.Next, true, 6},
-		{"next at end", s.Next, false, 6},
-		{"prev", s.Prev, true, 3},
-		{"prev", s.Prev, true, 0},
-		{"prev at start", s.Prev, false, 0},
-		{"last", s.Last, true, 6},
-		{"first", s.First, true, 0},
+		{"next match", s.NextMatch, true, 3},
+		{"next match", s.NextMatch, true, 6},
+		{"next match at end", s.NextMatch, false, 6},
+		{"prev match", s.PrevMatch, true, 3},
+		{"prev match", s.PrevMatch, true, 0},
+		{"prev match at start", s.PrevMatch, false, 0},
 	}
 	for _, st := range steps {
 		if ok := st.op(); ok != st.ok || s.Cursor() != st.want {
@@ -575,11 +574,11 @@ func TestSessionNavigation(t *testing.T) {
 			t.Errorf("SetFilter(%v) from %d: filter=%v cursor=%d, want %d", st.f, st.cursor, s.Filter(), s.Cursor(), st.want)
 		}
 	}
-	// Filter "all" navigation visits the other-status record.
+	// Filter "all" matched navigation visits the other-status record.
 	s.SetFilter(FilterAll)
 	s.SetCursor(4)
-	if !s.Next() || s.Cursor() != 5 {
-		t.Errorf("all: Next from 4 = %d, want 5", s.Cursor())
+	if !s.NextMatch() || s.Cursor() != 5 {
+		t.Errorf("all: NextMatch from 4 = %d, want 5", s.Cursor())
 	}
 }
 
@@ -591,7 +590,7 @@ func TestSessionNoMatches(t *testing.T) {
 	if s.Filter() != FilterComplete || s.Cursor() != 3 {
 		t.Errorf("SetFilter with no matches: filter=%v cursor=%d", s.Filter(), s.Cursor())
 	}
-	for name, op := range map[string]func() bool{"next": s.Next, "prev": s.Prev, "first": s.First, "last": s.Last, "advance": s.Advance} {
+	for name, op := range map[string]func() bool{"next match": s.NextMatch, "prev match": s.PrevMatch, "advance": s.Advance} {
 		if op() || s.Cursor() != 3 {
 			t.Errorf("%s with no matches moved to %d", name, s.Cursor())
 		}
@@ -684,5 +683,277 @@ func TestFilters(t *testing.T) {
 	}
 	if _, err := ParseFilter("done"); err == nil {
 		t.Error("ParseFilter accepted an unknown filter")
+	}
+}
+
+// savedLabels parses the labels file into labels by id, failing on a duplicate id; n is the number of lines.
+func (f fixture) savedLabels(t *testing.T) (labels map[string]Label, n int) {
+	t.Helper()
+	data, err := os.ReadFile(f.out)
+	if err != nil {
+		t.Fatalf("read out: %v", err)
+	}
+	labels = map[string]Label{}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		n++
+		var l Label
+		if err := json.Unmarshal([]byte(line), &l); err != nil {
+			t.Fatalf("parse %q: %v", line, err)
+		}
+		if _, dup := labels[l.ID]; dup {
+			t.Fatalf("duplicate id %q in labels file", l.ID)
+		}
+		labels[l.ID] = l
+	}
+	return labels, n
+}
+
+func TestSessionQueueNavigation(t *testing.T) {
+	s := navSession(t) // filter unfinished; 1, 2, 4, 5 labeled
+	steps := []struct {
+		name string
+		op   func() bool
+		ok   bool
+		want int
+	}{
+		{"prev at start", s.Prev, false, 0},
+		{"next onto complete", s.Next, true, 1},
+		{"next onto uncertain", s.Next, true, 2},
+		{"next onto unfinished", s.Next, true, 3},
+		{"next onto skipped", s.Next, true, 4},
+		{"next onto other status", s.Next, true, 5},
+		{"next", s.Next, true, 6},
+		{"next at end", s.Next, false, 6},
+		{"prev onto other status", s.Prev, true, 5},
+		{"prev onto skipped", s.Prev, true, 4},
+		{"first", s.First, true, 0},
+		{"first again", s.First, true, 0},
+		{"last", s.Last, true, 6},
+	}
+	for _, st := range steps {
+		if ok := st.op(); ok != st.ok || s.Cursor() != st.want {
+			t.Fatalf("%s: ok=%v cursor=%d, want ok=%v cursor=%d", st.name, ok, s.Cursor(), st.ok, st.want)
+		}
+	}
+	if s.Filter() != FilterUnfinished {
+		t.Errorf("queue navigation changed the filter to %v", s.Filter())
+	}
+}
+
+func TestSessionReviseLabeledRecord(t *testing.T) {
+	nam := &Target{Text: "Nam", Start: 4, End: 7}
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, s *Session) // draft before the first mark of idxLend
+		first      string
+		revise     func(t *testing.T, s *Session) // draft edits after returning with Prev
+		status     string
+		wantType   string
+		wantTarget *Target
+	}{
+		{
+			name: "complete to another type",
+			setup: func(t *testing.T, s *Session) {
+				mustSetType(t, s, idxLend, "lend")
+				mustSetTarget(t, s, idxLend, 4, 7)
+			},
+			first:      StatusComplete,
+			revise:     func(t *testing.T, s *Session) { mustSetType(t, s, idxLend, "borrow") },
+			status:     StatusComplete,
+			wantType:   "borrow",
+			wantTarget: nam,
+		},
+		{
+			name:  "uncertain to complete",
+			setup: func(*testing.T, *Session) {},
+			first: StatusUncertain,
+			revise: func(t *testing.T, s *Session) {
+				mustSetType(t, s, idxLend, "lend")
+				mustSetTarget(t, s, idxLend, 4, 7)
+			},
+			status:     StatusComplete,
+			wantType:   "lend",
+			wantTarget: nam,
+		},
+		{
+			name:     "skipped to uncertain with a type",
+			setup:    func(*testing.T, *Session) {},
+			first:    StatusSkipped,
+			revise:   func(t *testing.T, s *Session) { mustSetType(t, s, idxLend, "borrow") },
+			status:   StatusUncertain,
+			wantType: "borrow",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, "")
+			s := f.open(t)
+			mustMark(t, s, idxReal1, StatusSkipped)
+			mustMark(t, s, idxExpense, StatusSkipped) // a label after the revised record
+			s.SetCursor(idxLend)
+			tt.setup(t, s)
+			mustMark(t, s, idxLend, tt.first)
+			if !s.Advance() || s.Cursor() != idxRepaymentIn {
+				t.Fatalf("Advance = cursor %d, want %d", s.Cursor(), idxRepaymentIn)
+			}
+			if !s.Prev() || s.Cursor() != idxLend {
+				t.Fatalf("Prev = cursor %d, want labeled record %d", s.Cursor(), idxLend)
+			}
+			tt.revise(t, s)
+			mustMark(t, s, idxLend, tt.status)
+
+			labels, n := f.savedLabels(t)
+			if n != 3 || len(labels) != 3 {
+				t.Fatalf("labels file has %d lines / %d ids, want 3 (one per labeled id)", n, len(labels))
+			}
+			got := labels["case-lend"]
+			if got.Status != tt.status || got.Type == nil || *got.Type != tt.wantType || !reflect.DeepEqual(got.Target, tt.wantTarget) {
+				t.Errorf("revised label = %+v (type %v), want %s %s %+v", got, got.Type, tt.status, tt.wantType, tt.wantTarget)
+			}
+			if c := s.Counts(); c.Remaining != 4 {
+				t.Errorf("counts after revision = %+v, want 4 remaining", c)
+			}
+			if _, err := Open(f.queue, f.schema, f.out); err != nil {
+				t.Errorf("reopen after revision: %v", err)
+			}
+		})
+	}
+}
+
+func TestSessionUndo(t *testing.T) {
+	f := newFixture(t, "")
+	s := f.open(t)
+	if _, _, ok, err := s.Undo(); ok || err != nil || s.CanUndo() {
+		t.Fatalf("Undo on a fresh session: ok=%v err=%v canUndo=%v", ok, err, s.CanUndo())
+	}
+
+	mustMark(t, s, idxReal1, StatusSkipped)
+	mustSetType(t, s, idxLend, "lend")
+	mustSetTarget(t, s, idxLend, 4, 7)
+	mustMark(t, s, idxLend, StatusComplete)
+	completeLine := f.outLines(t)[1]
+	mustSetType(t, s, idxLend, "borrow")
+	mustMark(t, s, idxLend, StatusUncertain) // revision
+	mustSetType(t, s, idxLend, "expense")    // pending draft dropped by Undo
+	s.SetCursor(idxUncertain)
+
+	steps := []struct {
+		index    int
+		desc     string
+		marked   int
+		wantFile []string // labels file lines after the undo
+	}{
+		{idxLend, "restored complete", 2, []string{f.outLines(t)[0], completeLine}},
+		{idxLend, "removed label", 1, []string{f.outLines(t)[0]}},
+		{idxReal1, "removed label", 0, nil},
+	}
+	for _, st := range steps {
+		index, desc, ok, err := s.Undo()
+		if err != nil || !ok || index != st.index || desc != st.desc {
+			t.Fatalf("Undo = %d %q ok=%v err=%v, want %d %q", index, desc, ok, err, st.index, st.desc)
+		}
+		if s.Cursor() != st.index {
+			t.Errorf("cursor after undo = %d, want %d", s.Cursor(), st.index)
+		}
+		if s.Dirty(st.index) {
+			t.Errorf("draft of %d survived undo: %+v", st.index, s.Draft(st.index))
+		}
+		if marked, _ := s.Speed(); marked != st.marked {
+			t.Errorf("marked = %d, want %d", marked, st.marked)
+		}
+		data, _ := os.ReadFile(f.out)
+		var lines []string
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if line != "" {
+				lines = append(lines, line)
+			}
+		}
+		if !reflect.DeepEqual(lines, st.wantFile) {
+			t.Errorf("labels file after undo = %q, want %q", lines, st.wantFile)
+		}
+		if st.desc == "restored complete" {
+			if l, ok := s.Label(idxLend); !ok || l.Status != StatusComplete || *l.Type != "lend" || l.Target == nil || *l.Target != (Target{Text: "Nam", Start: 4, End: 7}) {
+				t.Errorf("restored label = %+v, want complete lend Nam", l)
+			}
+		}
+	}
+	for _, i := range []int{idxReal1, idxLend} {
+		if _, ok := s.Label(i); ok {
+			t.Errorf("label %d survived undo of its first mark", i)
+		}
+	}
+	if _, _, ok, err := s.Undo(); ok || err != nil || s.CanUndo() {
+		t.Errorf("Undo with an empty stack: ok=%v err=%v canUndo=%v", ok, err, s.CanUndo())
+	}
+	if marked, _ := s.Speed(); marked != 0 {
+		t.Errorf("marked = %d, want 0", marked)
+	}
+}
+
+func TestSessionUndoWriteFailure(t *testing.T) {
+	f := newFixture(t, "")
+	outDir := filepath.Join(f.dir, "out")
+	if err := os.Mkdir(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(f.queue, f.schema, filepath.Join(outDir, "labels.jsonl"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustSetType(t, s, idxLend, "lend")
+	mustMark(t, s, idxLend, StatusComplete)
+	mustSetType(t, s, idxLend, "borrow")
+	mustMark(t, s, idxLend, StatusUncertain)
+	s.SetCursor(idxReal2)
+	if err := os.RemoveAll(outDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, ok, err := s.Undo(); err == nil || ok {
+		t.Fatalf("Undo without an output directory: ok=%v err=%v", ok, err)
+	}
+	if l, _ := s.Label(idxLend); l.Status != StatusUncertain || *l.Type != "borrow" {
+		t.Errorf("label changed by failed undo: %+v", l)
+	}
+	if !s.CanUndo() || s.Cursor() != idxReal2 {
+		t.Errorf("failed undo: canUndo=%v cursor=%d, want entry kept and cursor %d", s.CanUndo(), s.Cursor(), idxReal2)
+	}
+	if marked, _ := s.Speed(); marked != 2 {
+		t.Errorf("marked = %d, want 2", marked)
+	}
+}
+
+func TestSessionFind(t *testing.T) {
+	s := newFixture(t, "").open(t)
+	tests := []struct {
+		query string
+		want  int
+		err   string
+	}{
+		{"1", 0, ""},
+		{" 3 ", 2, ""},
+		{"7", 6, ""},
+		{"case-expense", idxExpense, ""},
+		{" baseline-01-efb9ecbae1cf\t", idxReal2, ""},
+		{"8", 0, "no record 8: the queue has 7"},
+		{"0", 0, "no record 0: the queue has 7"},
+		{"case-missing", 0, `no record with id "case-missing"`},
+		{"Case-Expense", 0, `no record with id "Case-Expense"`},
+		{"  ", 0, "enter a queue position or record id"},
+	}
+	for _, tt := range tests {
+		got, err := s.Find(tt.query)
+		if tt.err != "" {
+			if err == nil || err.Error() != tt.err {
+				t.Errorf("Find(%q) = %d, %v, want error %q", tt.query, got, err, tt.err)
+			}
+			continue
+		}
+		if err != nil || got != tt.want {
+			t.Errorf("Find(%q) = %d, %v, want %d", tt.query, got, err, tt.want)
+		}
 	}
 }
