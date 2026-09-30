@@ -142,36 +142,68 @@ func (s *spanSel) move(delta int) { s.collapse(s.head + delta) }
 // extend moves the head by delta runes, keeping the anchor.
 func (s *spanSel) extend(delta int) { s.head = s.clamp(s.head + delta) }
 
-// nextWord selects the first whole word starting after the selection. It
-// reports whether there was one.
+// wordAt returns the index in s.words of the word containing rune i, or -1
+// when i is not on a word rune.
+func (s spanSel) wordAt(i int) int {
+	for k, w := range s.words {
+		if w[0] <= i && i < w[1] {
+			return k
+		}
+	}
+	return -1
+}
+
+// selectWord selects word k exactly and reports whether the selection changed.
+func (s *spanSel) selectWord(k int) bool {
+	w := s.words[k]
+	if lo, hi := s.bounds(); lo == w[0] && hi == w[1]-1 {
+		return false
+	}
+	s.anchor, s.head = w[0], w[1]-1
+	return true
+}
+
+// nextWord selects the word under the selection's end when it is not already
+// exactly selected, else the first whole word starting after the selection. It
+// reports whether the selection moved.
 func (s *spanSel) nextWord() bool {
 	_, hi := s.bounds()
-	for _, w := range s.words {
+	if k := s.wordAt(hi); k >= 0 && s.selectWord(k) {
+		return true
+	}
+	for k, w := range s.words {
 		if w[0] > hi {
-			s.anchor, s.head = w[0], w[1]-1
-			return true
+			return s.selectWord(k)
 		}
 	}
 	return false
 }
 
-// prevWord selects the last whole word starting before the selection. It
-// reports whether there was one.
+// prevWord selects the word under the selection's start when it is not
+// already exactly selected, else the last whole word starting before the
+// selection. It reports whether the selection moved.
 func (s *spanSel) prevWord() bool {
 	lo, _ := s.bounds()
-	for i := len(s.words) - 1; i >= 0; i-- {
-		if w := s.words[i]; w[0] < lo {
-			s.anchor, s.head = w[0], w[1]-1
-			return true
+	if k := s.wordAt(lo); k >= 0 && s.selectWord(k) {
+		return true
+	}
+	for k := len(s.words) - 1; k >= 0; k-- {
+		if s.words[k][0] < lo {
+			return s.selectWord(k)
 		}
 	}
 	return false
 }
 
 // extendNextWord grows the selection forward to the end of the next word
-// after it, anchoring at its start. It reports whether there was one.
+// after it, anchoring at its start. From a single non-word rune (a space or
+// punctuation) it selects the next word instead, so the span never starts on
+// that rune. It reports whether there was one.
 func (s *spanSel) extendNextWord() bool {
 	lo, hi := s.bounds()
+	if lo == hi && !isWordRune(s.runes[lo]) {
+		return s.nextWord()
+	}
 	for _, w := range s.words {
 		if w[1]-1 > hi {
 			s.anchor, s.head = lo, w[1]-1
@@ -182,9 +214,14 @@ func (s *spanSel) extendNextWord() bool {
 }
 
 // extendPrevWord grows the selection backward to the start of the previous
-// word before it, anchoring at its end. It reports whether there was one.
+// word before it, anchoring at its end. From a single non-word rune it selects
+// the previous word instead, so the span never ends on that rune. It reports
+// whether there was one.
 func (s *spanSel) extendPrevWord() bool {
 	lo, hi := s.bounds()
+	if lo == hi && !isWordRune(s.runes[lo]) {
+		return s.prevWord()
+	}
 	for i := len(s.words) - 1; i >= 0; i-- {
 		if w := s.words[i]; w[0] < lo {
 			s.anchor, s.head = hi, w[0]

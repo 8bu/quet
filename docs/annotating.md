@@ -278,9 +278,9 @@ target, else on the first word. A word is a run of letters, digits and combining
 | Key | Action |
 | --- | --- |
 | `h` / `l`, `←` / `→` | move one character (collapses the selection) |
-| `w` / `b` | select the next / previous whole word |
+| `w` / `b` | select the whole word under the cursor if it isn't already selected (so `0` then `w` picks the first word), else the next / previous whole word |
 | `H` / `L`, `shift+←` / `shift+→` | move the head one character left / right, keeping the anchor (grows or shrinks the selection) |
-| `W` / `B` | extend to the end of the next word / the start of the previous word |
+| `W` / `B` | extend to the end of the next word / the start of the previous word; from a single space or punctuation character, select the next / previous word instead |
 | `0`, `home` / `$`, `end` | first / last character |
 | `enter` | accept the selection as the target |
 | `n` | null target, and leave span mode |

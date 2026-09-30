@@ -290,6 +290,13 @@ func TestAnnotateSpanKeys(t *testing.T) {
 		{"B extends back to word start", typed("wwwB"), runeOffset(t, text, "ở"), pizza + 4},
 		{"$ last character", typed("$"), n - 1, n - 1},
 		{"0 first character", typed("$0"), 0, 0},
+		{"w on the first rune selects the first word", typed("$0w"), 0, 1},
+		{"w inside a word selects that word", typed("hw"), 0, 1},
+		{"w mid-word selects the whole word", typed("wwwhw"), pizza, pizza + 4},
+		{"w on a whole word goes to the next", typed("w"), runeOffset(t, text, "tối"), runeOffset(t, text, "tối") + 2},
+		{"b on the first rune selects the first word", typed("$0b"), 0, 1},
+		{"W from a space starts at the next word", typed("lW"), runeOffset(t, text, "tối"), runeOffset(t, text, "tối") + 2},
+		{"B from a space ends at the previous word", typed("lB"), 0, 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
