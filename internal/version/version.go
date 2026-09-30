@@ -10,7 +10,7 @@ import "strings"
 
 // Version is the semantic version, without a leading "v". release-please bumps
 // it in the Release PR, so a plain `go build` of a tag reports that tag.
-var Version = "0.2.3" // x-release-please-version
+var Version = "0.2.4" // x-release-please-version
 
 // Commit is the short git revision the binary was built from, when known.
 var Commit = ""
