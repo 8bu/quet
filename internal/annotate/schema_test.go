@@ -85,6 +85,8 @@ func TestParseSchemaErrors(t *testing.T) {
 		{"null type item", "types: [a, ~]\nstatuses: [complete]\n", "expected a name"},
 		{"null target undeclared", "types: [a]\nstatuses: [complete]\nnull_target_types: [b]\n", `"b" is not a declared type`},
 		{"null target not list", "types: [a]\nstatuses: [complete]\nnull_target_types: a\n", "expected a list"},
+		{"null label undeclared", "types: [a]\nstatuses: [complete]\nnull_label_statuses: [skipped]\n", `null_label_statuses: line 3: "skipped" is not a declared status`},
+		{"null label duplicate", "types: [a]\nstatuses: [skipped]\nnull_label_statuses: [skipped, skipped]\n", `null_label_statuses: line 3: duplicate "skipped"`},
 		{"version mapping", "version: {a: 1}\ntypes: [a]\nstatuses: [complete]\n", "version: line 1"},
 	}
 	for _, tt := range tests {

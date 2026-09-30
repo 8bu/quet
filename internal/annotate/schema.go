@@ -24,12 +24,17 @@ type TypeDef struct{ Name, Description string }
 // StatusDef is one declared annotation status and its schema description.
 type StatusDef struct{ Name, Description string }
 
-// Schema is the annotation contract: declared types and statuses (YAML order) and the types whose target must be null.
+// Schema is the annotation contract: declared types and statuses (YAML order), the types whose target must be null
+// and the statuses whose type and target must both be null.
 type Schema struct {
 	Version         string
 	Types           []TypeDef   // YAML order
 	Statuses        []StatusDef // YAML order
 	NullTargetTypes []string
+	// NullLabelStatuses are the statuses Mark saves with a null type and target. When the schema has no
+	// null_label_statuses key it defaults to [skipped] if skipped is declared (Quet's skip role means "no label").
+	// Loading does not enforce it, so older labels that break the rule still open and can be re-marked.
+	NullLabelStatuses []string
 }
 
 // LoadSchema reads and parses the schema YAML at path.
@@ -46,7 +51,8 @@ func LoadSchema(path string) (*Schema, error) {
 }
 
 // ParseSchema parses schema YAML. types and statuses may each be a mapping name→description or a sequence of
-// names; both are required and non-empty. null_target_types and version are optional; other keys are ignored.
+// names; both are required and non-empty. null_target_types, null_label_statuses and version are optional; other
+// keys are ignored.
 func ParseSchema(data []byte) (*Schema, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -64,7 +70,7 @@ func ParseSchema(data []byte) (*Schema, error) {
 	for k := 0; k+1 < len(root.Content); k += 2 {
 		key, val := root.Content[k], resolve(root.Content[k+1])
 		switch key.Value {
-		case "version", "types", "statuses", "null_target_types":
+		case "version", "types", "statuses", "null_target_types", "null_label_statuses":
 			if _, dup := fields[key.Value]; dup {
 				return nil, fmt.Errorf("line %d: duplicate key %q", key.Line, key.Value)
 			}
@@ -95,27 +101,44 @@ func ParseSchema(data []byte) (*Schema, error) {
 		s.Statuses = append(s.Statuses, StatusDef(d))
 	}
 
-	if n, ok := fields["null_target_types"]; ok && !isNull(n) {
-		if n.Kind != yaml.SequenceNode {
-			return nil, fmt.Errorf("null_target_types: line %d: expected a list of type names", n.Line)
-		}
-		seen := map[string]bool{}
-		for _, item := range n.Content {
-			item = resolve(item)
-			if item.Kind != yaml.ScalarNode || isNull(item) {
-				return nil, fmt.Errorf("null_target_types: line %d: expected a type name", item.Line)
-			}
-			if !s.HasType(item.Value) {
-				return nil, fmt.Errorf("null_target_types: line %d: %q is not a declared type", item.Line, item.Value)
-			}
-			if seen[item.Value] {
-				return nil, fmt.Errorf("null_target_types: line %d: duplicate %q", item.Line, item.Value)
-			}
-			seen[item.Value] = true
-			s.NullTargetTypes = append(s.NullTargetTypes, item.Value)
-		}
+	if s.NullTargetTypes, err = parseNames("null_target_types", "type", fields["null_target_types"], s.HasType); err != nil {
+		return nil, err
+	}
+	if s.NullLabelStatuses, err = parseNames("null_label_statuses", "status", fields["null_label_statuses"], s.HasStatus); err != nil {
+		return nil, err
+	}
+	if n, ok := fields["null_label_statuses"]; (!ok || isNull(n)) && s.HasStatus(StatusSkipped) {
+		s.NullLabelStatuses = []string{StatusSkipped}
 	}
 	return s, nil
+}
+
+// parseNames parses an optional list of declared names (null or absent = none): every entry a scalar for which
+// declared is true, without duplicates. kind names the entry ("type", "status") in errors.
+func parseNames(field, kind string, n *yaml.Node, declared func(string) bool) ([]string, error) {
+	if n == nil || isNull(n) {
+		return nil, nil
+	}
+	if n.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("%s: line %d: expected a list of %s names", field, n.Line, kind)
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, item := range n.Content {
+		item = resolve(item)
+		if item.Kind != yaml.ScalarNode || isNull(item) {
+			return nil, fmt.Errorf("%s: line %d: expected a %s name", field, item.Line, kind)
+		}
+		if !declared(item.Value) {
+			return nil, fmt.Errorf("%s: line %d: %q is not a declared %s", field, item.Line, item.Value, kind)
+		}
+		if seen[item.Value] {
+			return nil, fmt.Errorf("%s: line %d: duplicate %q", field, item.Line, item.Value)
+		}
+		seen[item.Value] = true
+		names = append(names, item.Value)
+	}
+	return names, nil
 }
 
 // def is a parsed name/description pair shared by types and statuses.
@@ -208,6 +231,16 @@ func (s *Schema) HasStatus(name string) bool {
 func (s *Schema) NullTarget(typ string) bool {
 	for _, t := range s.NullTargetTypes {
 		if t == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// NullLabel reports whether labels with status must have a null type and a null target.
+func (s *Schema) NullLabel(status string) bool {
+	for _, st := range s.NullLabelStatuses {
+		if st == status {
 			return true
 		}
 	}

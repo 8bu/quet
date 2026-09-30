@@ -27,9 +27,10 @@ quet update replaces this binary with the latest release after verifying it
 against the release's SHA256SUMS; --check only reports whether one exists.
 
 quet annotate labels a JSONL queue ({"id","text"} per line) one record at a
-time against a YAML schema of types, statuses and null_target_types: a type,
-an optional target span of the text, and a status. The labels JSONL is
-rewritten each time a record is marked; reopening the same --out resumes.
+time against a YAML schema of types, statuses, null_target_types and
+null_label_statuses: a type, an optional target span of the text, and a
+status. The labels JSONL is rewritten each time a record is marked;
+reopening the same --out resumes.
 Review state is separate: annotating never touches the .quet.db sidecar.
 
 Re-check a subset: --labels opens a queue that is a subset of an existing
@@ -77,7 +78,9 @@ Init flags:
   -f, --force           overwrite existing config files
 
 Annotate flags:
-  --schema <path>       YAML schema: types, statuses, null_target_types
+  --schema <path>       YAML schema: types, statuses, null_target_types,
+                        null_label_statuses (default [skipped]: marking one
+                        saves a null type and target)
   --out <path>          labels JSONL, rewritten on every mark (resumes); every
                         label id must be in the queue
   --labels <path>       re-check: existing labels JSONL (must exist) that may

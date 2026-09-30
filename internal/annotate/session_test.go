@@ -183,6 +183,73 @@ func TestSessionTransferNullTarget(t *testing.T) {
 	}
 }
 
+// TestSessionSkipNullLabel: with the unmodified Gidi schema (no null_label_statuses key), skipping a
+// complete/lend/target record saves skipped/null/null and undo restores the complete label.
+func TestSessionSkipNullLabel(t *testing.T) {
+	f := newFixture(t, "")
+	s := f.open(t)
+	i := idxLend
+
+	mustSetType(t, s, i, "lend")
+	mustSetTarget(t, s, i, 4, 7) // "Nam"
+	mustMark(t, s, i, StatusComplete)
+	completeLine := `{"id":"case-lend","annotation_status":"complete","type":"lend","target":{"text":"Nam","start":4,"end":7}}`
+	if got := f.outLines(t); !reflect.DeepEqual(got, []string{completeLine}) {
+		t.Fatalf("labels file = %q", got)
+	}
+
+	mustMark(t, s, i, StatusSkipped)
+	if got := f.outLines(t); !reflect.DeepEqual(got, []string{`{"id":"case-lend","annotation_status":"skipped","type":null,"target":null}`}) {
+		t.Errorf("labels file after skip = %q", got)
+	}
+	if d := s.Draft(i); d != (Draft{}) || s.Dirty(i) {
+		t.Errorf("draft after skip = %+v dirty=%v, want empty and clean", d, s.Dirty(i))
+	}
+
+	if _, _, ok, err := s.Undo(); !ok || err != nil {
+		t.Fatalf("Undo = %v, %v", ok, err)
+	}
+	if got := f.outLines(t); !reflect.DeepEqual(got, []string{completeLine}) {
+		t.Errorf("labels file after undo = %q", got)
+	}
+}
+
+// TestSchemaNullLabelStatuses: an existing skipped label that still carries a type and target loads (default or
+// explicit null_label_statuses) and re-skipping it saves null/null; an explicit empty list turns clearing off.
+func TestSchemaNullLabelStatuses(t *testing.T) {
+	gidi, err := os.ReadFile(gidiSchemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range []string{"", "\nnull_label_statuses: [skipped]\n"} {
+		f := newFixture(t, string(gidi)+extra)
+		stale := `{"id":"case-lend","annotation_status":"skipped","type":"lend","target":{"text":"Nam","start":4,"end":7}}` + "\n"
+		if err := os.WriteFile(f.out, []byte(stale), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(f.queue, f.schema, f.out)
+		if err != nil {
+			t.Fatalf("schema%q: Open rejected a stale skipped label: %v", extra, err)
+		}
+		if d := s.Draft(idxLend); d.Type != "lend" || d.Target == nil {
+			t.Errorf("schema%q: stale label not shown: %+v", extra, d)
+		}
+		mustMark(t, s, idxLend, StatusSkipped)
+		if got := f.outLines(t); !reflect.DeepEqual(got, []string{`{"id":"case-lend","annotation_status":"skipped","type":null,"target":null}`}) {
+			t.Errorf("schema%q: re-skipped labels file = %q", extra, got)
+		}
+	}
+
+	skippedLend := `{"id":"case-lend","annotation_status":"skipped","type":"lend","target":null}` + "\n"
+	f := newFixture(t, string(gidi)+"\nnull_label_statuses: []\n")
+	s := f.open(t)
+	mustSetType(t, s, idxLend, "lend")
+	mustMark(t, s, idxLend, StatusSkipped)
+	if got := f.outLines(t); !reflect.DeepEqual(got, []string{strings.TrimSuffix(skippedLend, "\n")}) {
+		t.Errorf("opted out: labels file = %q", got)
+	}
+}
+
 func TestSessionMarkRejections(t *testing.T) {
 	f := newFixture(t, "")
 	s := f.open(t)
@@ -219,7 +286,7 @@ func TestSessionMarkRejections(t *testing.T) {
 		t.Errorf("marked = %d after failures", marked)
 	}
 
-	// uncertain and skipped keep the values they carry.
+	// uncertain keeps the values it carries; skipped (the default null_label_statuses) drops them.
 	mustSetType(t, s, i, "lend")
 	mustSetTarget(t, s, i, 4, 7)
 	mustMark(t, s, i, StatusUncertain)
@@ -227,7 +294,7 @@ func TestSessionMarkRejections(t *testing.T) {
 	mustMark(t, s, idxReal2, StatusSkipped)
 	want := []string{
 		`{"id":"case-lend","annotation_status":"uncertain","type":"lend","target":{"text":"Nam","start":4,"end":7}}`,
-		`{"id":"baseline-01-efb9ecbae1cf","annotation_status":"skipped","type":"borrow","target":null}`,
+		`{"id":"baseline-01-efb9ecbae1cf","annotation_status":"skipped","type":null,"target":null}`,
 	}
 	if got := f.outLines(t); !reflect.DeepEqual(got, want) {
 		t.Errorf("labels file = %q, want %q", got, want)

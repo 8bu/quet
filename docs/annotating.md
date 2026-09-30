@@ -66,12 +66,19 @@ statuses:                      # at least one
   complete: Type and target confidently determined.
   uncertain: The text does not settle the type or the target.
   skipped: Not a review, or not worth labelling.
+
+null_label_statuses: [skipped] # optional; default [skipped]; these statuses save a null type and target
 ```
 
 - `types` and `statuses` are either a mapping of name → description (shown in the type picker and
   help) or a plain list of names (`types: [positive, negative, neutral]`). Order is kept. Each needs
   at least one entry, without duplicates.
 - `null_target_types` is an optional list; every entry must be a declared type.
+- `null_label_statuses` is an optional list; every entry must be a declared status. Marking a record
+  with one of these statuses saves `"type":null,"target":null`, dropping any type or target the
+  record had, so `s` on a `complete` label turns it into a plain skip. Undo brings the old label back.
+  Without the key it defaults to `[skipped]` when `skipped` is declared; `null_label_statuses: []`
+  turns clearing off.
 - `version` is an optional string. All other keys are ignored, so a schema shared with other tools
   can carry its own settings.
 
@@ -109,6 +116,10 @@ Every label is checked against the schema when it is marked and when the labels 
   `0 ≤ start < end ≤` the text length, `text` is exactly the text between them, it is non-empty, and
   it neither starts nor ends with whitespace.
 - `target` must be `null` when the type is in `null_target_types`, whatever the status.
+
+`null_label_statuses` is applied when marking, not checked on load: a labels file that already has,
+say, a `skipped` label with a type still opens, shows that type, and is cleaned up to
+`"type":null,"target":null` the next time the record is marked with that status.
 
 Loading an existing labels file also rejects invalid JSON, unknown keys (a label may only have `id`,
 `annotation_status`, `type`, `target` and `note`; a target only `text`, `start` and `end`), ids that

@@ -242,9 +242,9 @@ func TestRecheckHandFormattedLineRewrittenAndRestored(t *testing.T) {
 	s := f.open(t)
 	const k = 3 // record 21 (21%7 = 0: hand-formatted skipped line with an escaped note)
 	mustSetType(t, s, k, "beta")
-	mustMark(t, s, k, StatusSkipped)
+	mustMark(t, s, k, StatusUncertain)
 	got := string(f.read(t))
-	want := `{"id":"r021","annotation_status":"skipped","type":"beta","target":null,"note":"ăn"}` + "\n"
+	want := `{"id":"r021","annotation_status":"uncertain","type":"beta","target":null,"note":"ăn"}` + "\n"
 	if !strings.Contains(got, want) || strings.Count(got, `"r021"`) != 1 {
 		t.Errorf("re-encoded line %q not found once in:\n%s", want, got)
 	}

@@ -20,3 +20,6 @@ statuses:
   complete: Type and target (or an explicit null target) confidently determined.
   uncertain: The text does not settle the type or the target.
   skipped: Not a review, or not worth labelling.
+
+# Statuses whose type and target must be null: marking with one clears them.
+null_label_statuses: [skipped]

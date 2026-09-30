@@ -324,10 +324,11 @@ func (s *Session) ClearTarget(i int) {
 	s.setDraft(i, d)
 }
 
-// Mark saves the draft as a label with status: builds Label (existing Note preserved), Validate, write file
-// atomically (save); on write failure the in-memory label is restored. Success: draft dropped, session mark count
-// +1, the replaced label (or its absence) pushed on the undo stack. An existing label is overwritten in place, so the
-// file keeps one line per id. Does NOT move the cursor.
+// Mark saves the draft as a label with status: builds Label (existing Note preserved; type and target dropped when
+// the schema lists status in null_label_statuses), Validate, write file atomically (save); on write failure the
+// in-memory label is restored. Success: draft dropped, session mark count +1, the replaced label (or its absence)
+// pushed on the undo stack. An existing label is overwritten in place, so the file keeps one line per id. Does NOT
+// move the cursor.
 func (s *Session) Mark(i int, status string) error {
 	if !s.schema.HasStatus(status) {
 		return fmt.Errorf("status %q is not declared in the schema", status)
@@ -336,7 +337,9 @@ func (s *Session) Mark(i int, status string) error {
 	d := s.Draft(i)
 	prev, had := s.labels[item.ID]
 	l := Label{ID: item.ID, Status: status, Target: d.Target, Note: prev.Note}
-	if d.Type != "" {
+	if s.schema.NullLabel(status) {
+		l.Target = nil
+	} else if d.Type != "" {
 		l.Type = new(d.Type)
 	}
 	if err := s.schema.Validate(l, item.Text); err != nil {
