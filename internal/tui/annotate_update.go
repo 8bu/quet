@@ -160,7 +160,8 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 }
 
 // mark saves the current draft with status, then advances to the next record
-// left to do in the filter. Re-marking a labeled record reports a revision.
+// left to do in the filter (in a re-check, the next record in the filter, without
+// wrapping). Re-marking a labeled record reports a revision.
 func (m annotModel) mark(status string) (annotModel, tea.Cmd) {
 	if !m.sess.Schema().HasStatus(status) {
 		return m.setError("status %q is not declared in the schema", status)
@@ -176,6 +177,9 @@ func (m annotModel) mark(status string) (annotModel, tea.Cmd) {
 		what = "revised " + status
 	}
 	if !m.sess.Advance() {
+		if m.sess.Recheck() {
+			return m.setStatus("%s %s · end of re-check in %s", what, id, m.sess.Filter())
+		}
 		return m.setStatus("%s %s · all records in %s are done", what, id, m.sess.Filter())
 	}
 	return m.setStatus("%s %s", what, id)

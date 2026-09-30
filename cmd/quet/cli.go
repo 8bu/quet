@@ -66,6 +66,8 @@ type command struct {
 	hasSchema  bool
 	outPath    string
 	hasOut     bool
+	labelsPath string
+	hasLabels  bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -81,7 +83,8 @@ func usagef(format string, args ...any) error {
 // --flag value and --flag=value are both accepted. The first positional "stats", "export"
 // or a scripting command (list, show, set, flag, suggest, edit, undo) followed by a corpus
 // argument selects that subcommand; the scripting commands take record IDs after the corpus.
-// "annotate" followed by a queue file labels it against --schema into --out.
+// "annotate" followed by a queue file labels it against --schema into --out, or re-checks
+// it as a subset of the existing canonical labels file given with --labels.
 // "init" (no corpus) writes starter config files, "update" (no corpus) updates the binary
 // and "help" prints the help. With no corpus argument the review TUI opens on the file browser.
 func parseArgs(args []string) (command, error) {
@@ -223,7 +226,7 @@ func splitFlag(arg string) (name, value string, hasValue bool) {
 func valueFlag(name string) bool {
 	switch name {
 	case "--filter", "--flags-file", "--config", "--status", "-o", "--output", "--format",
-		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out":
+		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out", "--labels":
 		return true
 	}
 	return false
@@ -242,6 +245,8 @@ func (c *command) setValueFlag(name, value string) error {
 		c.schemaPath, c.hasSchema = value, true
 	case "--out":
 		c.outPath, c.hasOut = value, true
+	case "--labels":
+		c.labelsPath, c.hasLabels = value, true
 	case "--status":
 		c.status, c.hasStatus = value, true
 	case "-o", "--output":
@@ -318,6 +323,9 @@ func (c *command) validate() error {
 		if c.hasOut {
 			return usagef("--out is only valid with `quet annotate`")
 		}
+		if c.hasLabels {
+			return usagef("--labels is only valid with `quet annotate`")
+		}
 	}
 	switch c.kind {
 	case "init":
@@ -384,16 +392,20 @@ func (c *command) validate() error {
 	return nil
 }
 
-// validateAnnotate checks the flags of `quet annotate`: only --schema and --out, both required.
+// validateAnnotate checks the flags of `quet annotate`: only --schema plus exactly one of
+// --out (label the queue) and --labels (re-check it against an existing labels file).
 func (c *command) validateAnnotate() error {
-	if err := c.validateOnly("--schema", "--out"); err != nil {
+	if err := c.validateOnly("--schema", "--out", "--labels"); err != nil {
 		return err
 	}
 	if c.schemaPath == "" {
 		return usagef("`quet annotate` needs --schema <schema.yaml>")
 	}
-	if c.outPath == "" {
-		return usagef("`quet annotate` needs --out <labels.jsonl>")
+	if c.hasOut && c.hasLabels {
+		return usagef("--out and --labels are mutually exclusive")
+	}
+	if c.outPath == "" && c.labelsPath == "" {
+		return usagef("`quet annotate` needs --out <labels.jsonl> or --labels <labels.jsonl>")
 	}
 	return nil
 }
@@ -497,5 +509,6 @@ func (c *command) givenFlags() []string {
 	add(c.revert, "--revert")
 	add(c.hasSchema, "--schema")
 	add(c.hasOut, "--out")
+	add(c.hasLabels, "--labels")
 	return flags
 }

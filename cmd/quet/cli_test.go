@@ -188,6 +188,11 @@ func TestParseArgs(t *testing.T) {
 			args: []string{"annotate", "--schema", "s.yaml", "q.jsonl", "--out=l.jsonl"},
 			want: command{kind: "annotate", corpus: "q.jsonl", status: "approved", schemaPath: "s.yaml", hasSchema: true, outPath: "l.jsonl", hasOut: true},
 		},
+		{
+			name: "annotate re-check with labels",
+			args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--labels=l.jsonl"},
+			want: command{kind: "annotate", corpus: "q.jsonl", status: "approved", schemaPath: "s.yaml", hasSchema: true, labelsPath: "l.jsonl", hasLabels: true},
+		},
 	}
 
 	for _, tt := range tests {
@@ -260,7 +265,9 @@ func TestParseArgsErrors(t *testing.T) {
 		{name: "annotate without queue", args: []string{"annotate", "--schema", "s.yaml", "--out", "l.jsonl"}, want: "missing queue file"},
 		{name: "annotate without schema", args: []string{"annotate", "q.jsonl", "--out", "l.jsonl"}, want: "`quet annotate` needs --schema"},
 		{name: "annotate with empty schema", args: []string{"annotate", "q.jsonl", "--schema=", "--out", "l.jsonl"}, want: "`quet annotate` needs --schema"},
-		{name: "annotate without out", args: []string{"annotate", "q.jsonl", "--schema", "s.yaml"}, want: "`quet annotate` needs --out"},
+		{name: "annotate without out", args: []string{"annotate", "q.jsonl", "--schema", "s.yaml"}, want: "`quet annotate` needs --out <labels.jsonl> or --labels <labels.jsonl>"},
+		{name: "annotate with out and labels", args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--out", "l.jsonl", "--labels", "l.jsonl"}, want: "--out and --labels are mutually exclusive"},
+		{name: "annotate labels missing value", args: []string{"annotate", "q.jsonl", "--schema", "s.yaml", "--labels"}, want: "flag --labels needs a value"},
 		{name: "annotate without flags", args: []string{"annotate", "q.jsonl"}, want: "`quet annotate` needs --schema"},
 		{name: "annotate schema missing value", args: []string{"annotate", "q.jsonl", "--out", "l.jsonl", "--schema"}, want: "flag --schema needs a value"},
 		{name: "annotate with two queues", args: []string{"annotate", "q.jsonl", "r.jsonl", "--schema", "s.yaml", "--out", "l.jsonl"}, want: `unexpected argument "r.jsonl"`},
@@ -269,6 +276,9 @@ func TestParseArgsErrors(t *testing.T) {
 		{name: "schema when reviewing", args: []string{"corpus.jsonl", "--schema", "s.yaml"}, want: "--schema is only valid with `quet annotate`"},
 		{name: "out when reviewing", args: []string{"corpus.jsonl", "--out=l.jsonl"}, want: "--out is only valid with `quet annotate`"},
 		{name: "out with stats", args: []string{"stats", "corpus.jsonl", "--out", "l.jsonl"}, want: "--out is only valid with `quet annotate`"},
+		{name: "labels when reviewing", args: []string{"corpus.jsonl", "--labels", "l.jsonl"}, want: "--labels is only valid with `quet annotate`"},
+		{name: "labels with export", args: []string{"export", "corpus.jsonl", "--labels=l.jsonl"}, want: "--labels is only valid with `quet annotate`"},
+		{name: "labels with list", args: []string{"list", "corpus.jsonl", "--labels", "l.jsonl"}, want: "--labels is only valid with `quet annotate`"},
 		{name: "schema with list", args: []string{"list", "corpus.jsonl", "--schema", "s.yaml"}, want: "--schema is only valid with `quet annotate`"},
 		{name: "schema with init", args: []string{"init", "--schema", "s.yaml"}, want: "--schema is only valid with `quet annotate`"},
 	}
@@ -407,6 +417,44 @@ func TestAnnotateOpenErrorSkipsScreen(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Errorf("labels file exists after a failed open (stat error %v)", err)
+	}
+}
+
+func TestAnnotateRecheckMissingLabelsSkipsScreen(t *testing.T) {
+	launched := stubAnnotateScreen(t, true)
+	queue, schema, labels := writeAnnotateFixture(t)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"annotate", queue, "--schema", schema, "--labels", labels}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if got := stderr.String(); !strings.HasPrefix(got, "quet: ") || !strings.Contains(got, labels) || strings.Contains(got, "Usage:") {
+		t.Errorf("stderr %q, want a one-line runtime error naming %s", got, labels)
+	}
+	if *launched != 0 {
+		t.Errorf("annotation screen launched %d times, want 0", *launched)
+	}
+	if _, err := os.Stat(labels); !os.IsNotExist(err) {
+		t.Errorf("labels file created by a failed re-check open (stat error %v)", err)
+	}
+}
+
+func TestAnnotateRecheckLaunchesScreen(t *testing.T) {
+	launched := stubAnnotateScreen(t, true)
+	queue, schema, labels := writeAnnotateFixture(t)
+	body := "{\"id\":\"elsewhere\",\"annotation_status\":\"complete\",\"type\":\"positive\",\"target\":null}\n"
+	if err := os.WriteFile(labels, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"annotate", queue, "--schema", schema, "--labels", labels}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	if *launched != 1 {
+		t.Errorf("annotation screen launched %d times, want 1", *launched)
 	}
 }
 

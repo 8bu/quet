@@ -47,10 +47,39 @@ var annotQueue = []annotate.Item{
 // a model sized 120x40 plus the labels output path.
 func annotTestModel(t *testing.T) (annotModel, string) {
 	t.Helper()
+	schemaPath, queuePath, outPath := writeAnnotFiles(t)
+	s, err := annotate.Open(queuePath, schemaPath, outPath)
+	if err != nil {
+		t.Fatalf("annotate.Open: %v", err)
+	}
+	m, _ := newAnnotModel(s).update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return m, outPath
+}
+
+// annotRecheckModel opens a re-check session over the queue fixture against a labels
+// file holding labels (raw JSONL), and returns a model sized 120x40 plus the labels path.
+func annotRecheckModel(t *testing.T, labels string) (annotModel, string) {
+	t.Helper()
+	schemaPath, queuePath, labelsPath := writeAnnotFiles(t)
+	if err := os.WriteFile(labelsPath, []byte(labels), 0o600); err != nil {
+		t.Fatalf("write labels: %v", err)
+	}
+	s, err := annotate.OpenRecheck(queuePath, schemaPath, labelsPath)
+	if err != nil {
+		t.Fatalf("annotate.OpenRecheck: %v", err)
+	}
+	m, _ := newAnnotModel(s).update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	return m, labelsPath
+}
+
+// writeAnnotFiles writes the schema and queue fixtures to a temp dir and returns
+// their paths plus the (not yet created) labels path next to them.
+func writeAnnotFiles(t *testing.T) (schemaPath, queuePath, labelsPath string) {
+	t.Helper()
 	dir := t.TempDir()
-	schemaPath := filepath.Join(dir, "schema.yaml")
-	queuePath := filepath.Join(dir, "queue.jsonl")
-	outPath := filepath.Join(dir, "labels.jsonl")
+	schemaPath = filepath.Join(dir, "schema.yaml")
+	queuePath = filepath.Join(dir, "queue.jsonl")
+	labelsPath = filepath.Join(dir, "labels.jsonl")
 	if err := os.WriteFile(schemaPath, []byte(annotSchemaYAML), 0o600); err != nil {
 		t.Fatalf("write schema: %v", err)
 	}
@@ -66,12 +95,7 @@ func annotTestModel(t *testing.T) (annotModel, string) {
 	if err := os.WriteFile(queuePath, []byte(q.String()), 0o600); err != nil {
 		t.Fatalf("write queue: %v", err)
 	}
-	s, err := annotate.Open(queuePath, schemaPath, outPath)
-	if err != nil {
-		t.Fatalf("annotate.Open: %v", err)
-	}
-	m, _ := newAnnotModel(s).update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	return m, outPath
+	return schemaPath, queuePath, labelsPath
 }
 
 // queueLine is one queue JSONL line.
@@ -665,6 +689,43 @@ func TestAnnotateViewSizes(t *testing.T) {
 		if !strings.Contains(v, want) {
 			t.Errorf("80x24 view lacks %q:\n%s", want, v)
 		}
+	}
+}
+
+func TestAnnotateRecheckHeader(t *testing.T) {
+	labels := `{"id":"elsewhere","annotation_status":"skipped","type":null,"target":null}` + "\n" +
+		`{"id":"r2","annotation_status":"uncertain","type":null,"target":null}` + "\n"
+	m, _ := annotRecheckModel(t, labels)
+	m, _ = sendAnnot(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	v := m.View()
+	if lines := strings.Split(v, "\n"); len(lines) > 24 {
+		t.Errorf("80x24 re-check view has %d lines", len(lines))
+	}
+	for _, want := range []string{"Quet — re-check", "queue.jsonl → labels.jsonl", "Re-check 1 / 5",
+		"Labels: 2 total · 1 in current queue", "filter all", "Record 1 / 5"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("80x24 re-check view lacks %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "Quet — annotate") {
+		t.Errorf("re-check view shows the annotate title:\n%s", v)
+	}
+
+	// Marking r1 moves to r2 (already labeled: re-check visits every record in order)
+	// and the canonical file now holds one more label, in the queue.
+	m, _ = sendAnnot(m, keys(typed("4x"), []tea.Msg{enterKey, enterKey})...)
+	v = m.View()
+	for _, want := range []string{"Re-check 2 / 5", "Labels: 3 total · 2 in current queue"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("after marking, re-check view lacks %q:\n%s", want, v)
+		}
+	}
+
+	// The last record does not wrap back to the first.
+	m.sess.SetCursor(4)
+	m, _ = sendAnnot(m, runeKey('s'))
+	if m.sess.Cursor() != 4 || !strings.Contains(m.View(), "end of re-check in all") {
+		t.Errorf("after marking the last record: cursor %d, view:\n%s", m.sess.Cursor(), m.View())
 	}
 }
 

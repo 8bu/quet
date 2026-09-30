@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Target is a span of the record text. Offsets are Unicode code points ([]rune indices).
@@ -70,6 +71,17 @@ func padded(span []rune) bool {
 // ("; "-joined): undeclared status, missing type on a complete label, undeclared type, invalid target span, and a
 // target on a null-target type.
 func (s *Schema) Validate(l Label, text string) error {
+	return s.validate(l, func(t Target) string { return targetProblem(t, text) })
+}
+
+// validateDetached checks l like Validate for a label whose record text is unknown (an id outside the queue in
+// re-check mode): the target is only checked for internal consistency (detachedTargetProblem).
+func (s *Schema) validateDetached(l Label) error {
+	return s.validate(l, detachedTargetProblem)
+}
+
+// validate implements Validate with targetCheck describing why a non-null target is invalid ("" when valid).
+func (s *Schema) validate(l Label, targetCheck func(Target) string) error {
 	var problems []string
 	if !s.HasStatus(l.Status) {
 		problems = append(problems, fmt.Sprintf("annotation_status: %q is not one of [%s]", l.Status, strings.Join(s.statusNames(), ", ")))
@@ -82,7 +94,7 @@ func (s *Schema) Validate(l Label, text string) error {
 		problems = append(problems, fmt.Sprintf("type: %q is not one of [%s]", *l.Type, strings.Join(s.typeNames(), ", ")))
 	}
 	if l.Target != nil {
-		if p := targetProblem(*l.Target, text); p != "" {
+		if p := targetCheck(*l.Target); p != "" {
 			problems = append(problems, p)
 		}
 		if l.Type != nil && s.NullTarget(*l.Type) {
@@ -113,45 +125,152 @@ func targetProblem(t Target, text string) string {
 	return ""
 }
 
-// LoadLabels reads the labels JSONL at path. A missing file means no labels yet. Invalid JSON, unknown or missing
-// keys, ids not in queue, duplicate ids and any Validate failure (against the queue text) are errors citing the line.
+// detachedTargetProblem describes why t is not a structurally valid span without its record text: offsets must
+// form a non-empty range [start,end) with start >= 0 whose length in code points equals that of t.Text. Returns ""
+// when valid.
+func detachedTargetProblem(t Target) string {
+	if t.Start < 0 {
+		return fmt.Sprintf("target: span start %d is negative", t.Start)
+	}
+	if t.End <= t.Start {
+		return fmt.Sprintf("target: span [%d,%d) is empty", t.Start, t.End)
+	}
+	if n := utf8.RuneCountInString(t.Text); n != t.End-t.Start {
+		return fmt.Sprintf("target: text %q has %d code points, but the span [%d,%d) has %d", t.Text, n, t.Start, t.End, t.End-t.Start)
+	}
+	return ""
+}
+
+// LoadLabels reads the labels JSONL at path for a normal (--out) session. A missing file means no labels yet.
+// Invalid JSON, unknown or missing keys, ids not in queue, duplicate ids and any Validate failure (against the queue
+// text) are errors citing the line. Re-check sessions load a canonical labels file with loadLabelFile instead.
 func LoadLabels(path string, schema *Schema, queue []Item) (map[string]Label, error) {
-	labels := map[string]Label{}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return labels, nil
+		return map[string]Label{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read labels: %w", err)
 	}
-	texts := make(map[string]string, len(queue))
-	for _, it := range queue {
-		texts[it.ID] = it.Text
-	}
-	lines := map[string]int{}
-	err = forEachLine(data, func(lineNo int, line []byte) error {
-		l, err := decodeLabel(line)
-		if err != nil {
-			return err
-		}
+	texts := queueTexts(queue)
+	f, err := parseLabelFile(data, func(l Label) error {
 		text, ok := texts[l.ID]
 		if !ok {
 			return fmt.Errorf("id %q is not in the queue", l.ID)
 		}
-		if first, dup := lines[l.ID]; dup {
-			return fmt.Errorf("duplicate id %q (first on line %d)", l.ID, first)
-		}
 		if err := schema.Validate(l, text); err != nil {
 			return fmt.Errorf("id %q: %w", l.ID, err)
 		}
-		lines[l.ID] = lineNo
-		labels[l.ID] = l
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("labels %s:%w", path, err)
 	}
-	return labels, nil
+	return f.queueLabels(queue), nil
+}
+
+// labelFile is a parsed labels file: its exact content and its label lines in file order.
+type labelFile struct {
+	data  []byte         // the file content as read or written
+	lines []labelLine    // non-blank lines in file order
+	index map[string]int // id → index in lines
+}
+
+// labelLine is one label line: the decoded label and the line's exact bytes (without the newline).
+type labelLine struct {
+	label Label
+	raw   []byte
+}
+
+// line returns the line of id, if the file has one.
+func (f *labelFile) line(id string) (labelLine, bool) {
+	i, ok := f.index[id]
+	if !ok {
+		return labelLine{}, false
+	}
+	return f.lines[i], true
+}
+
+// queueLabels returns the file's labels whose id is in queue, keyed by id (targets copied).
+func (f *labelFile) queueLabels(queue []Item) map[string]Label {
+	labels := map[string]Label{}
+	for _, it := range queue {
+		if ln, ok := f.line(it.ID); ok {
+			l := ln.label
+			l.Target = copyTarget(l.Target)
+			labels[it.ID] = l
+		}
+	}
+	return labels
+}
+
+// queueTexts maps each queue id to its record text.
+func queueTexts(queue []Item) map[string]string {
+	texts := make(map[string]string, len(queue))
+	for _, it := range queue {
+		texts[it.ID] = it.Text
+	}
+	return texts
+}
+
+// parseLabelFile strictly decodes every non-blank line of data (decodeLabel), rejects duplicate ids and calls
+// check (when non-nil) on each decoded label. Errors are prefixed with the line number (as forEachLine).
+func parseLabelFile(data []byte, check func(Label) error) (*labelFile, error) {
+	raws := bytes.Split(data, []byte("\n"))
+	f := &labelFile{data: data, index: map[string]int{}}
+	lineNos := map[string]int{}
+	err := forEachLine(data, func(lineNo int, line []byte) error {
+		l, err := decodeLabel(line)
+		if err != nil {
+			return err
+		}
+		if first, dup := lineNos[l.ID]; dup {
+			return fmt.Errorf("duplicate id %q (first on line %d)", l.ID, first)
+		}
+		if check != nil {
+			if err := check(l); err != nil {
+				return err
+			}
+		}
+		lineNos[l.ID] = lineNo
+		f.index[l.ID] = len(f.lines)
+		f.lines = append(f.lines, labelLine{label: l, raw: raws[lineNo-1]})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// loadLabelFile reads the canonical labels file of a re-check session. Unlike LoadLabels the file must exist and
+// may hold ids outside queue. Every line is decoded strictly and duplicate ids are rejected; labels of queue ids
+// get the full Validate against the queue text, others validateDetached. Errors cite the file and line.
+func loadLabelFile(path string, schema *Schema, queue []Item) (*labelFile, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("labels file %s does not exist", path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read labels: %w", err)
+	}
+	texts := queueTexts(queue)
+	f, err := parseLabelFile(data, func(l Label) error {
+		var err error
+		if text, ok := texts[l.ID]; ok {
+			err = schema.Validate(l, text)
+		} else {
+			err = schema.validateDetached(l)
+		}
+		if err != nil {
+			return fmt.Errorf("id %q: %w", l.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("labels %s:%w", path, err)
+	}
+	return f, nil
 }
 
 // decodeLabel strictly decodes one label line: exactly the known keys, id/annotation_status/type/target required.
@@ -241,9 +360,29 @@ func checkKeys(fields map[string]json.RawMessage, allowed map[string]bool, requi
 }
 
 // WriteLabels atomically writes labels (keyed by id) to path in queue order, one object per line with non-ASCII
-// and HTML characters unescaped. Labels whose id is not in queue are an error. The file is written to a temp file
-// in the same directory and renamed over path.
+// and HTML characters unescaped: the whole file of a normal (--out) session. Labels whose id is not in queue are an
+// error. The file is written to a temp file in the same directory and renamed over path. Re-check sessions write
+// with writeMergedLabels instead.
 func WriteLabels(path string, queue []Item, labels map[string]Label) error {
+	if _, err := checkStray(queue, labels); err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	enc := newLabelEncoder(&buf)
+	for _, it := range queue {
+		l, ok := labels[it.ID]
+		if !ok {
+			continue
+		}
+		if err := encodeLabel(enc, it.ID, l); err != nil {
+			return err
+		}
+	}
+	return writeAtomic(path, buf.Bytes())
+}
+
+// checkStray returns the set of queue ids, or an error listing the ids of labels that are not in queue.
+func checkStray(queue []Item, labels map[string]Label) (map[string]bool, error) {
 	inQueue := make(map[string]bool, len(queue))
 	for _, it := range queue {
 		inQueue[it.ID] = true
@@ -256,23 +395,127 @@ func WriteLabels(path string, queue []Item, labels map[string]Label) error {
 	}
 	if len(stray) > 0 {
 		sort.Strings(stray)
-		return fmt.Errorf("write labels: id(s) not in the queue: %q", stray)
+		return nil, fmt.Errorf("write labels: id(s) not in the queue: %q", stray)
 	}
+	return inQueue, nil
+}
 
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
+// newLabelEncoder returns the label line encoder: one object per line, non-ASCII and HTML characters unescaped.
+func newLabelEncoder(buf *bytes.Buffer) *json.Encoder {
+	enc := json.NewEncoder(buf)
 	enc.SetEscapeHTML(false)
+	return enc
+}
+
+// encodeLabel encodes l with its ID set to id as one line.
+func encodeLabel(enc *json.Encoder, id string, l Label) error {
+	l.ID = id
+	if err := enc.Encode(l); err != nil {
+		return fmt.Errorf("encode label %q: %w", id, err)
+	}
+	return nil
+}
+
+// writeMergedLabels atomically rewrites the canonical labels file of a re-check session with the queue labels
+// replaced by labels, and returns the written file as the new baseline. orig is the file as opened, base as last
+// read or written. It refuses (nothing written) when the file on disk no longer equals base.data (changed by
+// someone else), when mergeLabels refuses, or when the merged output does not hold exactly one line per id of
+// orig ∪ labels.
+func writeMergedLabels(path string, orig, base *labelFile, queue []Item, labels map[string]Label) (*labelFile, error) {
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read labels: %w", err)
+	}
+	if !bytes.Equal(cur, base.data) {
+		return nil, fmt.Errorf("labels file %s was changed by another program since quet last read or wrote it; refusing to overwrite it (reopen to pick up the changes)", path)
+	}
+	data, err := mergeLabels(orig, base, queue, labels)
+	if err != nil {
+		return nil, err
+	}
+	next, err := parseLabelFile(data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("write labels %s: merged output line %w", path, err)
+	}
+	want := len(orig.lines)
+	for id := range labels {
+		if _, ok := orig.index[id]; !ok {
+			want++
+		}
+		if _, ok := next.index[id]; !ok {
+			return nil, fmt.Errorf("write labels %s: merged output lost label %q", path, id)
+		}
+	}
+	for _, ln := range orig.lines {
+		if _, ok := next.index[ln.label.ID]; !ok {
+			return nil, fmt.Errorf("write labels %s: merged output lost label %q", path, ln.label.ID)
+		}
+	}
+	if len(next.lines) != want {
+		return nil, fmt.Errorf("write labels %s: merged output has %d labels, want %d", path, len(next.lines), want)
+	}
+	if err := writeAtomic(path, data); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// mergeLabels builds the canonical labels file content: base's lines in order, each ending with a newline (blank
+// lines dropped). Lines of ids outside queue, and of queue ids whose label equals base's, keep base's bytes; a
+// changed queue label that equals orig's keeps orig's bytes, otherwise it is re-encoded; a queue id with no label
+// is dropped, except that dropping an id of orig is refused. Labels of queue ids not in base are appended in queue
+// order. Labels whose id is not in queue are an error.
+func mergeLabels(orig, base *labelFile, queue []Item, labels map[string]Label) ([]byte, error) {
+	inQueue, err := checkStray(queue, labels)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := newLabelEncoder(&buf)
+	for _, ln := range base.lines {
+		id := ln.label.ID
+		l, ok := labels[id]
+		switch {
+		case !inQueue[id] || ok && labelEqual(l, ln.label):
+			buf.Write(ln.raw)
+			buf.WriteByte('\n')
+		case ok:
+			if o, had := orig.line(id); had && labelEqual(l, o.label) {
+				buf.Write(o.raw)
+				buf.WriteByte('\n')
+			} else if err := encodeLabel(enc, id, l); err != nil {
+				return nil, err
+			}
+		default:
+			if _, had := orig.index[id]; had {
+				return nil, fmt.Errorf("write labels: refusing to drop label %q, which was in the labels file when it was opened", id)
+			}
+		}
+	}
 	for _, it := range queue {
 		l, ok := labels[it.ID]
-		if !ok {
+		if _, inBase := base.index[it.ID]; !ok || inBase {
 			continue
 		}
-		l.ID = it.ID
-		if err := enc.Encode(l); err != nil {
-			return fmt.Errorf("encode label %q: %w", it.ID, err)
+		if err := encodeLabel(enc, it.ID, l); err != nil {
+			return nil, err
 		}
 	}
-	return writeAtomic(path, buf.Bytes())
+	return buf.Bytes(), nil
+}
+
+// labelEqual reports whether a and b have the same id, status, type, target and note.
+func labelEqual(a, b Label) bool {
+	if a.ID != b.ID || a.Status != b.Status || a.Note != b.Note {
+		return false
+	}
+	if (a.Type == nil) != (b.Type == nil) || a.Type != nil && *a.Type != *b.Type {
+		return false
+	}
+	if (a.Target == nil) != (b.Target == nil) || a.Target != nil && *a.Target != *b.Target {
+		return false
+	}
+	return true
 }
 
 // writeAtomic replaces path with data via a synced temp file in the same directory and a rename.

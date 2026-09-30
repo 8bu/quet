@@ -69,14 +69,22 @@ quet annotate examples/annotation/queue.jsonl \
   --schema examples/annotation/schema.yaml --out labels.jsonl
 ```
 
-See [Annotating](docs/annotating.md).
+To re-check a subset of an existing labels file, open the subset queue with `--labels` instead of
+`--out`: only the subset's records are shown and editable, and every other label is preserved.
+
+```sh
+quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
+```
+
+See [Annotating](docs/annotating.md) and its [Re-check subset](docs/annotating.md#re-check-subset)
+section.
 
 ## Documentation
 
 | | |
 | --- | --- |
 | [Usage](docs/usage.md) | Command line, file browser, `init`, `stats`, `update` |
-| [Annotating](docs/annotating.md) | `quet annotate`: schemas, labels output, validation, span keys, offsets |
+| [Annotating](docs/annotating.md) | `quet annotate`: schemas, labels output, validation, re-check subsets, span keys, offsets |
 | [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
 | [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |

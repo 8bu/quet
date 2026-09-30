@@ -107,17 +107,27 @@ func overlayBox(title string, w, h, ow int, rows []string, sel int) string {
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, box(title, true, ow, oh, rows, sel))
 }
 
-// headerRows renders identity, progress, counts, filter and session speed.
+// headerRows renders identity, progress, counts, filter and session speed; a re-check
+// session also shows how many labels the canonical file holds and how many are in the queue.
 func (m annotModel) headerRows() []string {
 	c := m.sess.Counts()
-	title := styleTitle.Render("Quet — annotate") + " · " +
+	recheck := m.sess.Recheck()
+	name := "Quet — annotate"
+	if recheck {
+		name = "Quet — re-check"
+	}
+	title := styleTitle.Render(name) + " · " +
 		filepath.Base(m.sess.QueuePath()) + " → " + filepath.Base(m.sess.OutPath())
 	cur := 0
 	if m.sess.Len() > 0 {
 		cur = m.sess.Cursor() + 1
 	}
-	counts := fmt.Sprintf("%d / %d  ·  complete %d · uncertain %d · skipped %d · remaining %d",
-		cur, c.Total, c.Complete, c.Uncertain, c.Skipped, c.Remaining)
+	position := fmt.Sprintf("%d / %d", cur, c.Total)
+	if recheck {
+		position = fmt.Sprintf("Re-check %d / %d", cur, m.sess.Len())
+	}
+	counts := fmt.Sprintf("%s  ·  complete %d · uncertain %d · skipped %d · remaining %d",
+		position, c.Complete, c.Uncertain, c.Skipped, c.Remaining)
 	if c.Other > 0 {
 		counts += fmt.Sprintf(" · other %d", c.Other)
 	}
@@ -128,6 +138,10 @@ func (m annotModel) headerRows() []string {
 	}
 	marked, rate := m.sess.Speed()
 	progress := fmt.Sprintf("filter %s %s/%d  ·  session %d · %.1f/min", m.sess.Filter(), posText, n, marked, rate)
+	if recheck {
+		labels := fmt.Sprintf("Labels: %d total · %d in current queue", m.sess.LabelsTotal(), m.sess.LabelsInQueue())
+		return []string{title, counts, labels, progress}
+	}
 	return []string{title, counts, progress}
 }
 

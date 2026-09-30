@@ -11,7 +11,7 @@ Usage:
   quet [corpus.jsonl|corpus.json|corpus.txt|dir] [flags]
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
-  quet annotate <queue.jsonl> --schema <schema.yaml> --out <labels.jsonl>
+  quet annotate <queue.jsonl> --schema <schema.yaml> (--out|--labels) <labels.jsonl>
   quet init [--global] [--force]
   quet update [--check]
   quet help
@@ -31,6 +31,11 @@ time against a YAML schema of types, statuses and null_target_types: a type,
 an optional target span of the text, and a status. The labels JSONL is
 rewritten each time a record is marked; reopening the same --out resumes.
 Review state is separate: annotating never touches the .quet.db sidecar.
+
+Re-check a subset: --labels opens a queue that is a subset of an existing
+canonical labels file instead of --out. Only the queue's records are shown and
+editable; every other label is kept byte-for-byte.
+  quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
 
 Scripting (no TUI): read and change the same review state and undo log as the
 review screen. Record ids are those printed by quet list.
@@ -73,7 +78,13 @@ Init flags:
 
 Annotate flags:
   --schema <path>       YAML schema: types, statuses, null_target_types
-  --out <path>          labels JSONL, rewritten on every mark (resumes)
+  --out <path>          labels JSONL, rewritten on every mark (resumes); every
+                        label id must be in the queue
+  --labels <path>       re-check: existing labels JSONL (must exist) that may
+                        hold ids outside the queue; only queue ids are editable,
+                        all others are preserved byte-for-byte; written
+                        atomically, refused if another program changed the
+                        file since quet last read or wrote it. Excludes --out.
 
 Keys:
   w approve   s reject   space needs review   z undo

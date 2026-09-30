@@ -18,23 +18,27 @@ The [example schema](../examples/annotation/schema.yaml) labels review sentiment
 
 ```sh
 quet annotate <queue.jsonl> --schema <schema.yaml> --out <labels.jsonl>
+quet annotate <queue.jsonl> --schema <schema.yaml> --labels <labels.jsonl>
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--schema <path>` | YAML schema: types, statuses and null-target types (required) |
-| `--out <path>` | Labels JSONL, rewritten after every mark; reopening it resumes (required) |
+| `--out <path>` | Labels JSONL for this queue, rewritten after every mark; reopening it resumes |
+| `--labels <path>` | Existing canonical labels JSONL to [re-check a subset](#re-check-subset) of |
 
-The queue argument and flags may come in any order, and `--flag value` and `--flag=value` are both
-accepted. A missing queue, a missing `--schema` or `--out`, an extra argument, or a flag that
-belongs to another command prints the usage on stderr and exits with status 2. `--schema` and
-`--out` are rejected by every other command.
+Exactly one of `--out` and `--labels` is required; giving both is an error. The queue argument and
+flags may come in any order, and `--flag value` and `--flag=value` are both accepted. A missing
+queue, a missing `--schema`, neither or both of `--out` and `--labels`, an extra argument, or a flag
+that belongs to another command prints the usage on stderr and exits with status 2. `--schema`,
+`--out` and `--labels` are rejected by every other command.
 
 The schema, queue and existing labels are loaded and validated before anything else; any problem is
 reported as `quet: <error>` (citing the line number where there is one) with exit status 1. The
 annotation screen then needs an interactive terminal: when standard input or output is not one,
 `quet annotate` prints `quet: quet annotate needs an interactive terminal` and exits with status 1.
-`--out` must not be the queue file, and its directory must already exist.
+The labels file (`--out` or `--labels`) must not be the queue file, and its directory must already
+exist; a `--labels` file must exist too.
 
 ## Queue
 
@@ -77,7 +81,8 @@ whose status the schema does not declare shows an error instead of marking anyth
 
 ## Labels
 
-One JSON object per annotated record, in queue order, keys in this order:
+One JSON object per annotated record, in queue order (with `--out`; see
+[Re-check subset](#re-check-subset) for `--labels`), keys in this order:
 
 ```json
 {"id":"rv-002","annotation_status":"complete","type":"positive","target":{"text":"nước dùng","start":22,"end":31}}
@@ -107,8 +112,8 @@ Every label is checked against the schema when it is marked and when the labels 
 
 Loading an existing labels file also rejects invalid JSON, unknown keys (a label may only have `id`,
 `annotation_status`, `type`, `target` and `note`; a target only `text`, `start` and `end`), ids that
-are not in the queue, and duplicate ids. Errors cite the line number. A missing labels file simply
-means nothing is labelled yet.
+are not in the queue (with `--out` only), and duplicate ids. Errors cite the line number. A missing
+`--out` file simply means nothing is labelled yet.
 
 ## Resuming
 
@@ -139,6 +144,45 @@ replaced in place, so the labels file never holds an id twice, and the status li
 loses its label if it had none), the labels file is rewritten, and the cursor moves to it. Pressing
 `z` again undoes the mark before that, down to the start of the session; then the status line says
 `nothing to undo`. Undo does not reach marks from earlier sessions.
+
+## Re-check subset
+
+To re-check some records of a larger, already-labelled dataset, put them in a subset queue and open
+it against the canonical labels file with `--labels` instead of `--out`:
+
+```sh
+quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
+```
+
+- The labels file must already exist (`labels file <path> does not exist` otherwise), so a typo
+  never starts a fresh file. It may hold labels for ids that are not in the queue.
+- Only the queue's records are shown, navigated and editable; every other label is kept exactly as
+  it was, byte for byte.
+- Every label is validated when the file is opened. Queue ids are checked against their text as
+  usual; other ids have no text to compare, so they get the schema checks (declared status and type,
+  a type when `complete`, no target on a null-target type) and a structural target check (`start ≥
+  0`, `end > start`, and `text` exactly `end - start` code points long). Invalid JSON, unknown keys
+  and duplicate ids anywhere in the file are errors too.
+- Marking a queue record replaces its line in place; a queue record that had no label gets a new
+  line appended at the end. Undo restores the previous line, or removes the appended one. Unchanged
+  lines keep their original bytes; blank lines are dropped on the first write.
+- Writes are atomic, as with `--out`. Before each write Quet re-reads the file, and if it differs
+  from what Quet last read or wrote (another program changed it), nothing is written and the mark
+  fails with an error asking you to reopen.
+
+The session opens under the `all` filter on the first queue record. After a mark the cursor moves to
+the next record of the filter in queue order, whether or not it already has a label, and does not
+wrap: marking the last one leaves the cursor there and the status line says
+`end of re-check in <filter>`. `a` / `d`, `[` / `]`, `g` / `G` and go to work as usual, within the
+subset queue.
+
+The header marks the mode: the title reads `Quet — re-check · <queue> → <labels>`, the counts row
+starts with `Re-check <position> / <queue length>`, and an extra row shows
+`Labels: <n> total · <m> in current queue`: the distinct labels in the file as saved, and how many
+of them belong to the queue.
+
+`--out` is unchanged and stays strict: every label id must be in the queue, and the file is rewritten
+in queue order.
 
 ## Filters
 

@@ -59,14 +59,19 @@ type Draft struct {
 // Counts summarises annotation progress. Other = labels with another schema status; Remaining = Total - labeled.
 type Counts struct{ Total, Complete, Uncertain, Skipped, Other, Remaining int }
 
-// Session is an annotation session over a queue: saved labels (persisted to the out file), per-record drafts,
+// Session is an annotation session over a queue: saved labels (persisted to the labels file), per-record drafts,
 // filter, cursor and the undo stack of this session's marks. It never writes the queue file.
+//
+// A normal session (Open) owns its labels file: every label id is in the queue and each write rewrites the whole
+// file in queue order. A re-check session (OpenRecheck) edits a subset queue against a larger canonical labels file:
+// only queue records are shown and editable, every other line is preserved byte for byte, and writes refuse when
+// the file changed on disk since it was last read or written.
 type Session struct {
 	schema    *Schema
 	queuePath string
 	outPath   string
 	items     []Item
-	labels    map[string]Label // saved labels by id
+	labels    map[string]Label // saved labels of queue records by id
 	drafts    map[int]Draft    // pending edits by queue index; only entries differing from the saved values
 	undo      []undoEntry      // successful marks of this session, most recent last
 	filter    Filter
@@ -74,6 +79,13 @@ type Session struct {
 	marked    int
 	now       func() time.Time
 	start     time.Time
+	recheck   *recheckState // nil in a normal session
+}
+
+// recheckState is the canonical labels file of a re-check session.
+type recheckState struct {
+	orig *labelFile // as opened: original line bytes for byte-identical restores; its ids are never dropped
+	base *labelFile // as last read or written: must equal the file on disk before each write
 }
 
 // undoEntry records the saved label a successful Mark replaced: prev is meaningful only when had is true.
@@ -83,10 +95,47 @@ type undoEntry struct {
 	prev  Label // that label (Target copied)
 }
 
-// Open loads schema, queue and existing labels (resume). Errors: any load error; an empty queue; outPath resolving
-// to the queue file; out's parent directory missing. Cursor starts on the first unfinished record (0 if none);
-// filter = FilterUnfinished.
+// Open loads schema, queue and existing labels (resume) for a normal session writing outPath (LoadLabels: a missing
+// file means no labels yet; every label id must be in the queue). Errors: any load error; an empty queue; outPath
+// resolving to the queue file; out's parent directory missing. Cursor starts on the first unfinished record (0 if
+// none); filter = FilterUnfinished.
 func Open(queuePath, schemaPath, outPath string) (*Session, error) {
+	s, err := open(queuePath, schemaPath, outPath)
+	if err != nil {
+		return nil, err
+	}
+	if s.labels, err = LoadLabels(outPath, s.schema, s.items); err != nil {
+		return nil, err
+	}
+	for i := range s.items {
+		if s.unfinished(i) {
+			s.cursor = i
+			break
+		}
+	}
+	return s, nil
+}
+
+// OpenRecheck opens a re-check session: the queue (typically a subset of the corpus) is labeled against the
+// existing canonical labels file at labelsPath, which may hold ids outside the queue (loadLabelFile). Errors: those
+// of Open, plus a missing labels file and any invalid line. Cursor starts at 0; filter = FilterAll.
+func OpenRecheck(queuePath, schemaPath, labelsPath string) (*Session, error) {
+	s, err := open(queuePath, schemaPath, labelsPath)
+	if err != nil {
+		return nil, err
+	}
+	f, err := loadLabelFile(labelsPath, s.schema, s.items)
+	if err != nil {
+		return nil, err
+	}
+	s.labels = f.queueLabels(s.items)
+	s.recheck = &recheckState{orig: f, base: f}
+	s.filter = FilterAll
+	return s, nil
+}
+
+// open loads schema and queue and checks the labels path (checkOut) for Open and OpenRecheck; labels are not loaded.
+func open(queuePath, schemaPath, outPath string) (*Session, error) {
 	schema, err := LoadSchema(schemaPath)
 	if err != nil {
 		return nil, err
@@ -101,25 +150,14 @@ func Open(queuePath, schemaPath, outPath string) (*Session, error) {
 	if err := checkOut(outPath, queuePath); err != nil {
 		return nil, err
 	}
-	labels, err := LoadLabels(outPath, schema, items)
-	if err != nil {
-		return nil, err
-	}
 	s := &Session{
 		schema:    schema,
 		queuePath: queuePath,
 		outPath:   outPath,
 		items:     items,
-		labels:    labels,
 		drafts:    map[int]Draft{},
 	}
 	s.SetClock(time.Now)
-	for i := range items {
-		if s.unfinished(i) {
-			s.cursor = i
-			break
-		}
-	}
 	return s, nil
 }
 
@@ -170,11 +208,26 @@ func realPath(abs string) string {
 // Schema returns the loaded schema.
 func (s *Session) Schema() *Schema { return s.schema }
 
-// QueuePath returns the queue file path as given to Open.
+// QueuePath returns the queue file path as given to Open or OpenRecheck.
 func (s *Session) QueuePath() string { return s.queuePath }
 
-// OutPath returns the labels file path as given to Open.
+// OutPath returns the labels file path as given to Open or OpenRecheck.
 func (s *Session) OutPath() string { return s.outPath }
+
+// Recheck reports whether the session was opened with OpenRecheck.
+func (s *Session) Recheck() bool { return s.recheck != nil }
+
+// LabelsTotal returns the number of distinct ids in the labels file as currently saved: in a re-check session the
+// queue labels plus every label outside the queue; in a normal session the saved labels.
+func (s *Session) LabelsTotal() int {
+	if s.recheck != nil {
+		return len(s.recheck.base.lines)
+	}
+	return len(s.labels)
+}
+
+// LabelsInQueue returns the number of saved labels whose id is in the queue.
+func (s *Session) LabelsInQueue() int { return len(s.labels) }
 
 // Len returns the number of queue records.
 func (s *Session) Len() int { return len(s.items) }
@@ -272,8 +325,8 @@ func (s *Session) ClearTarget(i int) {
 }
 
 // Mark saves the draft as a label with status: builds Label (existing Note preserved), Validate, write file
-// atomically; on write failure the in-memory label is restored. Success: draft dropped, session mark count +1,
-// the replaced label (or its absence) pushed on the undo stack. An existing label is overwritten in place, so the
+// atomically (save); on write failure the in-memory label is restored. Success: draft dropped, session mark count
+// +1, the replaced label (or its absence) pushed on the undo stack. An existing label is overwritten in place, so the
 // file keeps one line per id. Does NOT move the cursor.
 func (s *Session) Mark(i int, status string) error {
 	if !s.schema.HasStatus(status) {
@@ -290,7 +343,7 @@ func (s *Session) Mark(i int, status string) error {
 		return err
 	}
 	s.labels[item.ID] = l
-	if err := WriteLabels(s.outPath, s.items, s.labels); err != nil {
+	if err := s.save(); err != nil {
 		s.restoreLabel(item.ID, had, prev)
 		return err
 	}
@@ -310,11 +363,25 @@ func (s *Session) restoreLabel(id string, had bool, prev Label) {
 	}
 }
 
+// save persists the saved labels: WriteLabels in a normal session; in a re-check session writeMergedLabels, whose
+// written file becomes the new baseline.
+func (s *Session) save() error {
+	if s.recheck == nil {
+		return WriteLabels(s.outPath, s.items, s.labels)
+	}
+	base, err := writeMergedLabels(s.outPath, s.recheck.orig, s.recheck.base, s.items, s.labels)
+	if err != nil {
+		return err
+	}
+	s.recheck.base = base
+	return nil
+}
+
 // CanUndo reports whether Undo has a mark to revert.
 func (s *Session) CanUndo() bool { return len(s.undo) > 0 }
 
 // Undo reverts the most recent successful Mark of this session not yet undone: restores the record's previous saved
-// label (or removes it if it had none), rewrites the labels file atomically, drops the record's draft, moves the
+// label (or removes it if it had none), rewrites the labels file atomically (save), drops the record's draft, moves the
 // cursor to it and decrements the session mark count (not below 0). Returns the record's queue index and a short
 // description ("restored <status>" or "removed label"); ok=false when there is nothing to undo. On write failure
 // the in-memory state is left as before the Undo, the entry stays on the stack and err is returned.
@@ -326,7 +393,7 @@ func (s *Session) Undo() (index int, desc string, ok bool, err error) {
 	id := s.items[e.index].ID
 	cur, curHad := s.labels[id]
 	s.restoreLabel(id, e.had, e.prev)
-	if err := WriteLabels(s.outPath, s.items, s.labels); err != nil {
+	if err := s.save(); err != nil {
 		s.restoreLabel(id, curHad, cur)
 		return e.index, "", false, err
 	}
@@ -493,8 +560,12 @@ func (s *Session) PrevMatch() bool {
 
 // Advance is called after a successful Mark: moves to the next record after the cursor (wrapping, excluding cursor)
 // that matches the filter AND, when the filter is FilterUnfinished or FilterAll, is unfinished. false = none
-// (cursor unchanged).
+// (cursor unchanged). In a re-check session, where labeled records are the point, it is NextMatch: the next record
+// matching the filter, labeled or not, without wrapping.
 func (s *Session) Advance() bool {
+	if s.recheck != nil {
+		return s.NextMatch()
+	}
 	n := len(s.items)
 	needUnfinished := s.filter == FilterUnfinished || s.filter == FilterAll
 	for k := 1; k < n; k++ {

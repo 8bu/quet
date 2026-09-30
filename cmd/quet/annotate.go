@@ -12,10 +12,18 @@ import (
 var launchAnnotate = tui.RunAnnotate
 
 // runAnnotate labels the queue cmd.corpus against cmd.schemaPath, writing labels to
-// cmd.outPath. The inputs are loaded and validated before the terminal is checked, so
-// a bad schema, queue or labels file is reported even without an interactive terminal.
+// cmd.outPath, or with --labels re-checks the queue as a subset of the existing labels
+// file cmd.labelsPath. The inputs are loaded and validated before the terminal is
+// checked, so a bad schema, queue or labels file is reported even without an
+// interactive terminal.
 func runAnnotate(cmd command, _, stderr io.Writer) int {
-	session, err := annotate.Open(cmd.corpus, cmd.schemaPath, cmd.outPath)
+	var session *annotate.Session
+	var err error
+	if cmd.hasLabels {
+		session, err = annotate.OpenRecheck(cmd.corpus, cmd.schemaPath, cmd.labelsPath)
+	} else {
+		session, err = annotate.Open(cmd.corpus, cmd.schemaPath, cmd.outPath)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "quet: %v\n", err)
 		return 1
