@@ -158,14 +158,38 @@ func readLabelLines(t *testing.T, path string) []string {
 }
 
 // readLabels parses the labels file keyed by id, failing on a duplicate id:
-// revising a label must rewrite its line, never append another.
+// revising a label must rewrite its line, never append another. Members other than
+// id, annotation_status, type, note and span_status are span fields.
 func readLabels(t *testing.T, path string) map[string]annotate.Label {
 	t.Helper()
 	out := map[string]annotate.Label{}
 	for _, line := range readLabelLines(t, path) {
-		var l annotate.Label
-		if err := json.Unmarshal([]byte(line), &l); err != nil {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			t.Fatalf("parse label %q: %v", line, err)
+		}
+		l := annotate.Label{Spans: map[string]*annotate.Target{}}
+		for key, val := range raw {
+			var err error
+			switch key {
+			case "id":
+				err = json.Unmarshal(val, &l.ID)
+			case "annotation_status":
+				err = json.Unmarshal(val, &l.Status)
+			case "type":
+				err = json.Unmarshal(val, &l.Type)
+			case "note":
+				err = json.Unmarshal(val, &l.Note)
+			case "span_status":
+				err = json.Unmarshal(val, &l.SpanStatus)
+			default:
+				var tg *annotate.Target
+				err = json.Unmarshal(val, &tg)
+				l.Spans[key] = tg
+			}
+			if err != nil {
+				t.Fatalf("parse label %q member %s: %v", line, key, err)
+			}
 		}
 		if _, dup := out[l.ID]; dup {
 			t.Fatalf("labels file has id %q twice", l.ID)
@@ -210,8 +234,8 @@ func TestAnnotatePickerSpanComplete(t *testing.T) {
 	if m.mode != annotMain {
 		t.Fatalf("mode after accepting span = %d, want main", m.mode)
 	}
-	if d := m.sess.Draft(0); d.Target == nil || *d.Target != (annotate.Target{Text: "Nam", Start: 8, End: 11}) {
-		t.Fatalf("target = %+v, want Nam [8,11)", d.Target)
+	if d := m.sess.Draft(0); d.Spans["target"] == nil || *d.Spans["target"] != (annotate.Target{Text: "Nam", Start: 8, End: 11}) {
+		t.Fatalf("target = %+v, want Nam [8,11)", d.Spans["target"])
 	}
 	if !strings.Contains(m.View(), "unsaved draft") {
 		t.Errorf("view lacks the unsaved-draft marker")
@@ -237,8 +261,8 @@ func TestAnnotatePickerSpanComplete(t *testing.T) {
 	got := readLabels(t, out)["r2"]
 	wantTarget := annotate.Target{Text: "Pizza 4P", Start: start, End: start + 8}
 	if got.Status != annotate.StatusComplete || got.Type == nil || *got.Type != "expense" ||
-		got.Target == nil || *got.Target != wantTarget {
-		t.Fatalf("r2 label = %+v (target %+v), want complete expense %+v", got, got.Target, wantTarget)
+		got.Spans["target"] == nil || *got.Spans["target"] != wantTarget {
+		t.Fatalf("r2 label = %+v (target %+v), want complete expense %+v", got, got.Spans["target"], wantTarget)
 	}
 	if m.sess.Cursor() != 2 {
 		t.Fatalf("cursor = %d, want 2", m.sess.Cursor())
@@ -320,20 +344,20 @@ func TestAnnotateSpanRejectsPaddedSelection(t *testing.T) {
 	if m.mode != annotSpan || !m.statusErr {
 		t.Fatalf("mode = %d statusErr = %v, want span mode with an error", m.mode, m.statusErr)
 	}
-	if m.sess.Draft(0).Target != nil {
-		t.Fatalf("padded target was set: %+v", m.sess.Draft(0).Target)
+	if m.sess.Draft(0).Spans["target"] != nil {
+		t.Fatalf("padded target was set: %+v", m.sess.Draft(0).Spans["target"])
 	}
 }
 
 func TestAnnotateNullTarget(t *testing.T) {
 	m, _ := annotTestModel(t)
 	m, _ = sendAnnot(m, keys(typed("4x"), []tea.Msg{enterKey})...)
-	if m.sess.Draft(0).Target == nil {
+	if m.sess.Draft(0).Spans["target"] == nil {
 		t.Fatal("target not set")
 	}
 	m, _ = sendAnnot(m, runeKey('n'))
-	if m.sess.Draft(0).Target != nil {
-		t.Fatalf("n left target %+v", m.sess.Draft(0).Target)
+	if m.sess.Draft(0).Spans["target"] != nil {
+		t.Fatalf("n left target %+v", m.sess.Draft(0).Spans["target"])
 	}
 	if !strings.Contains(m.View(), "Target: null") {
 		t.Errorf("view lacks Target: null")
@@ -341,8 +365,8 @@ func TestAnnotateNullTarget(t *testing.T) {
 
 	// n inside span mode also nulls and leaves.
 	m, _ = sendAnnot(m, keys(typed("x"), []tea.Msg{enterKey}, typed("xn"))...)
-	if m.mode != annotMain || m.sess.Draft(0).Target != nil {
-		t.Fatalf("span n: mode %d target %+v, want main and null", m.mode, m.sess.Draft(0).Target)
+	if m.mode != annotMain || m.sess.Draft(0).Spans["target"] != nil {
+		t.Fatalf("span n: mode %d target %+v, want main and null", m.mode, m.sess.Draft(0).Spans["target"])
 	}
 }
 
@@ -350,11 +374,11 @@ func TestAnnotateTransferClearsTarget(t *testing.T) {
 	m, out := annotTestModel(t)
 	m.sess.SetCursor(2)
 	m, _ = sendAnnot(m, keys(typed("x"), []tea.Msg{enterKey})...)
-	if m.sess.Draft(2).Target == nil {
+	if m.sess.Draft(2).Spans["target"] == nil {
 		t.Fatal("target not set")
 	}
 	m, _ = sendAnnot(m, runeKey('7'))
-	if d := m.sess.Draft(2); d.Type != "transfer" || d.Target != nil {
+	if d := m.sess.Draft(2); d.Type != "transfer" || d.Spans["target"] != nil {
 		t.Fatalf("draft = %+v, want transfer with null target", d)
 	}
 	if !strings.Contains(m.View(), "target cleared") {
@@ -366,7 +390,7 @@ func TestAnnotateTransferClearsTarget(t *testing.T) {
 	}
 	sendAnnot(m, enterKey)
 	got := readLabels(t, out)["r3"]
-	if got.Status != annotate.StatusComplete || got.Type == nil || *got.Type != "transfer" || got.Target != nil {
+	if got.Status != annotate.StatusComplete || got.Type == nil || *got.Type != "transfer" || got.Spans["target"] != nil {
 		t.Fatalf("r3 label = %+v, want complete transfer null target", got)
 	}
 }
@@ -376,7 +400,7 @@ func TestAnnotateUncertainWithoutType(t *testing.T) {
 	m.sess.SetCursor(3)
 	sendAnnot(m, runeKey('u'))
 	got, ok := readLabels(t, out)["r4"]
-	if !ok || got.Status != annotate.StatusUncertain || got.Type != nil || got.Target != nil {
+	if !ok || got.Status != annotate.StatusUncertain || got.Type != nil || got.Spans["target"] != nil {
 		t.Fatalf("r4 label = %+v (present %v), want uncertain with null type/target", got, ok)
 	}
 }
@@ -417,7 +441,7 @@ func TestAnnotateFilterPickerRevise(t *testing.T) {
 		t.Errorf("view lacks the done notice:\n%s", m.View())
 	}
 	got := readLabels(t, out)["r1"]
-	if got.Type == nil || *got.Type != "expense" || got.Target == nil || got.Target.Text != "Nam" {
+	if got.Type == nil || *got.Type != "expense" || got.Spans["target"] == nil || got.Spans["target"].Text != "Nam" {
 		t.Fatalf("revised r1 = %+v, want expense keeping target Nam", got)
 	}
 }
@@ -490,7 +514,7 @@ func TestAnnotateReviseComplete(t *testing.T) {
 	labels := readLabels(t, out)
 	got := labels["r1"]
 	if len(labels) != 1 || got.Status != annotate.StatusComplete || labelType(got) != "borrow" ||
-		got.Target == nil || got.Target.Text != "Nam" {
+		got.Spans["target"] == nil || got.Spans["target"].Text != "Nam" {
 		t.Fatalf("labels = %+v, want only r1 complete borrow keeping target Nam", labels)
 	}
 }

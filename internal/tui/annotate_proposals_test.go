@@ -148,7 +148,7 @@ func TestAnnotateProposalAcceptSavesAndAdvances(t *testing.T) {
 		}
 	}
 	l := readLabels(t, out)["r1"]
-	if l.Status != annotate.StatusComplete || labelType(l) != "lend" || l.Target == nil || l.Target.Text != "2tr" {
+	if l.Status != annotate.StatusComplete || labelType(l) != "lend" || l.Spans["target"] == nil || l.Spans["target"].Text != "2tr" {
 		t.Errorf("saved label = %+v, want complete lend over 2tr", l)
 	}
 	if m.sess.Dirty(0) {
@@ -200,7 +200,7 @@ func TestAnnotateProposalLoadIntoDraftThenEdit(t *testing.T) {
 		t.Errorf("status = %q (error %v)", m.status, m.statusErr)
 	}
 	d := m.sess.Draft(0)
-	if d.Type != "lend" || d.Target == nil || d.Target.Text != "2tr" || !m.sess.Dirty(0) {
+	if d.Type != "lend" || d.Spans["target"] == nil || d.Spans["target"].Text != "2tr" || !m.sess.Dirty(0) {
 		t.Errorf("draft after P = %+v (dirty %v), want lend over 2tr", d, m.sess.Dirty(0))
 	}
 	if m.sess.Cursor() != 0 {
@@ -213,7 +213,7 @@ func TestAnnotateProposalLoadIntoDraftThenEdit(t *testing.T) {
 	// Change the type (borrow is schema type 3), then save with enter.
 	m, _ = sendAnnot(m, runeKey('3'), enterKey)
 	l := readLabels(t, out)["r1"]
-	if l.Status != annotate.StatusComplete || labelType(l) != "borrow" || l.Target == nil || l.Target.Text != "2tr" {
+	if l.Status != annotate.StatusComplete || labelType(l) != "borrow" || l.Spans["target"] == nil || l.Spans["target"].Text != "2tr" {
 		t.Errorf("saved label = %+v, want complete borrow over 2tr", l)
 	}
 	if strings.Contains(strings.Join(readLabelLines(t, out), "\n"), "confidence") {

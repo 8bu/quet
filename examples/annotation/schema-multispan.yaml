@@ -1,0 +1,30 @@
+# Example multi-span annotation schema for `quet annotate`: one pass labels the type and two
+# span fields (counterparty and amount) of a short money note.
+#   quet annotate examples/annotation/queue-multispan.jsonl \
+#     --schema examples/annotation/schema-multispan.yaml --out labels.jsonl
+
+version: expense-v1
+
+types:
+  expense: Money the writer paid out.
+  income: Money the writer received.
+  transfer: Money moved between the writer's own accounts or people; there is no counterparty.
+
+# Statuses are per record. Quet binds enter to complete, u to uncertain and s to skipped.
+statuses:
+  complete: Type and every span confidently determined.
+  uncertain: The text does not settle the type or a span.
+  skipped: Not a money note, or not worth labelling.
+
+# Statuses whose type and every span must be null: marking with one clears them.
+null_label_statuses: [skipped]
+
+# Span fields, in the order tab / shift+tab cycles them. Replaces null_target_types: a schema with
+# `spans:` must not also declare null_target_types.
+spans:
+  target:
+    description: Counterparty. Minimal span as typed.
+    null_for_types: [transfer]        # a transfer has no counterparty: this span must be null
+  value:
+    description: Monetary amount. Exact substring, no normalization.
+    statuses: [complete, uncertain]   # per-span status, cycled with c; the first one is the default

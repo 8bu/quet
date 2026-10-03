@@ -33,6 +33,13 @@ status. The labels JSONL is rewritten each time a record is marked;
 reopening the same --out resumes.
 Review state is separate: annotating never touches the .quet.db sidecar.
 
+Multi-span: a schema may declare spans: (name -> description, null_for_types,
+statuses) instead of the single implicit target; the type and every span are
+then labelled in one pass. Each label gets one key per span ({text,start,end}
+or null) and, for spans with statuses, a span_status object (default: the
+first status). null_target_types cannot be combined with spans:. Schemas
+without spans: and their labels files behave exactly as before.
+
 Re-check a subset: --labels opens a queue that is a subset of an existing
 canonical labels file instead of --out. Only the queue's records are shown and
 editable; every other label is kept byte-for-byte.
@@ -86,9 +93,10 @@ Init flags:
   -f, --force           overwrite existing config files
 
 Annotate flags:
-  --schema <path>       YAML schema: types, statuses, null_target_types,
-                        null_label_statuses (default [skipped]: marking one
-                        saves a null type and target)
+  --schema <path>       YAML schema: types, statuses, null_target_types or
+                        spans (several named span fields), null_label_statuses
+                        (default [skipped]: marking one saves a null type and
+                        every span)
   --out <path>          labels JSONL, rewritten on every mark (resumes); every
                         label id must be in the queue
   --labels <path>       re-check: existing labels JSONL (must exist) that may
@@ -100,7 +108,8 @@ Annotate flags:
                         with --out or --labels): one object per line with
                         id and annotation_status, optionally type, target
                         ({text,start,end} or null), note, confidence (0..1)
-                        and reason; other keys are ignored. Ids outside the
+                        and reason; other keys are ignored. With spans: one
+                        key per span name, plus span_status. Ids outside the
                         queue are ignored and reported on exit; invalid lines
                         and duplicate ids are refused. Confidence and reason
                         are never written.
@@ -114,6 +123,8 @@ Keys:
     n null target   esc discard   a/d prev/next (any record)   [/] in filter
     g/G first/last   : or # go to   z undo   f filter   ? help   q quit
     with --proposals: p accept proposal   P edit proposal
+    with spans: tab/shift+tab active span field   x/n act on it
+    c cycles its span status (fields with statuses)
 
 Data stays local: no telemetry; the network is only used by quet update or
 when update.check is on.

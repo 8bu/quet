@@ -2,7 +2,6 @@ package annotate
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -81,11 +80,22 @@ func mustSetType(t *testing.T, s *Session, i int, typ string) {
 	}
 }
 
+// mustSetTarget sets the target span of the implicit-schema Gidi fixture.
 func mustSetTarget(t *testing.T, s *Session, i, start, end int) {
 	t.Helper()
-	if err := s.SetTarget(i, start, end); err != nil {
-		t.Fatalf("SetTarget(%d,%d,%d): %v", i, start, end, err)
+	if err := s.SetSpan(i, "target", start, end); err != nil {
+		t.Fatalf("SetSpan(%d,target,%d,%d): %v", i, start, end, err)
 	}
+}
+
+// isEmptyDraft reports whether d has no type, no span value and no span status.
+func isEmptyDraft(d Draft) bool {
+	for _, t := range d.Spans {
+		if t != nil {
+			return false
+		}
+	}
+	return d.Type == "" && len(d.SpanStatus) == 0
 }
 
 func mustMark(t *testing.T, s *Session, i int, status string) {
@@ -128,7 +138,7 @@ func TestSessionGidiCompatibility(t *testing.T) {
 		t.Errorf("labels file:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	l, ok := s.Label(idxUncertain)
-	if !ok || l.Type != nil || l.Target != nil || l.Status != StatusUncertain {
+	if !ok || l.Type != nil || l.Spans["target"] != nil || l.Status != StatusUncertain {
 		t.Errorf("uncertain label = %+v, %v", l, ok)
 	}
 	for _, i := range []int{idxLend, idxRepaymentIn, idxExpense, idxTransfer, idxUncertain} {
@@ -146,30 +156,30 @@ func TestSessionTransferNullTarget(t *testing.T) {
 	mustSetType(t, s, i, "lend")
 	mustSetTarget(t, s, i, 3, 6) // "5tr"
 	cleared, err := s.SetType(i, "transfer")
-	if err != nil || !cleared {
-		t.Fatalf("SetType(transfer) = %v, %v; want cleared", cleared, err)
+	if err != nil || !reflect.DeepEqual(cleared, []string{"target"}) {
+		t.Fatalf("SetType(transfer) = %v, %v; want [target] cleared", cleared, err)
 	}
-	if d := s.Draft(i); d != (Draft{Type: "transfer"}) {
+	if d := s.Draft(i); d.Type != "transfer" || d.Spans["target"] != nil || len(d.SpanStatus) != 0 {
 		t.Errorf("draft = %+v, want transfer with null target", d)
 	}
-	if cleared, err := s.SetType(i, "transfer"); err != nil || cleared {
+	if cleared, err := s.SetType(i, "transfer"); err != nil || len(cleared) != 0 {
 		t.Errorf("SetType(transfer) again = %v, %v; want not cleared", cleared, err)
 	}
-	if err := s.SetTarget(i, 3, 6); err == nil || !strings.Contains(err.Error(), "null target") {
-		t.Errorf("SetTarget on transfer: err = %v", err)
+	if err := s.SetSpan(i, "target", 3, 6); err == nil || !strings.Contains(err.Error(), "null target") {
+		t.Errorf("SetSpan on transfer: err = %v", err)
 	}
-	if d := s.Draft(i); d.Target != nil {
-		t.Errorf("refused SetTarget changed draft: %+v", d)
+	if d := s.Draft(i); d.Spans["target"] != nil {
+		t.Errorf("refused SetSpan changed draft: %+v", d)
 	}
 
 	// A saved lend target is cleared from the draft (not the saved label) when switching to transfer.
 	mustSetType(t, s, i, "lend")
 	mustSetTarget(t, s, i, 3, 6)
 	mustMark(t, s, i, StatusComplete)
-	if cleared, _ := s.SetType(i, "transfer"); !cleared || !s.Dirty(i) {
+	if cleared, _ := s.SetType(i, "transfer"); !reflect.DeepEqual(cleared, []string{"target"}) || !s.Dirty(i) {
 		t.Errorf("switch saved lend to transfer: cleared=%v dirty=%v", cleared, s.Dirty(i))
 	}
-	if l, _ := s.Label(i); l.Target == nil {
+	if l, _ := s.Label(i); l.Spans["target"] == nil {
 		t.Error("saved label target lost before Mark")
 	}
 	mustMark(t, s, i, StatusComplete)
@@ -177,7 +187,7 @@ func TestSessionTransferNullTarget(t *testing.T) {
 		t.Errorf("labels file = %q", got)
 	}
 
-	bad := Label{ID: "case-transfer", Status: StatusComplete, Type: new("transfer"), Target: &Target{Text: "5tr", Start: 3, End: 6}}
+	bad := Label{ID: "case-transfer", Status: StatusComplete, Type: new("transfer"), Spans: tgt(&Target{Text: "5tr", Start: 3, End: 6})}
 	if err := s.Schema().Validate(bad, s.Item(i).Text); err == nil {
 		t.Error("Validate accepted transfer with a target")
 	}
@@ -202,7 +212,7 @@ func TestSessionSkipNullLabel(t *testing.T) {
 	if got := f.outLines(t); !reflect.DeepEqual(got, []string{`{"id":"case-lend","annotation_status":"skipped","type":null,"target":null}`}) {
 		t.Errorf("labels file after skip = %q", got)
 	}
-	if d := s.Draft(i); d != (Draft{}) || s.Dirty(i) {
+	if d := s.Draft(i); !isEmptyDraft(d) || s.Dirty(i) {
 		t.Errorf("draft after skip = %+v dirty=%v, want empty and clean", d, s.Dirty(i))
 	}
 
@@ -231,7 +241,7 @@ func TestSchemaNullLabelStatuses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("schema%q: Open rejected a stale skipped label: %v", extra, err)
 		}
-		if d := s.Draft(idxLend); d.Type != "lend" || d.Target == nil {
+		if d := s.Draft(idxLend); d.Type != "lend" || d.Spans["target"] == nil {
 			t.Errorf("schema%q: stale label not shown: %+v", extra, d)
 		}
 		mustMark(t, s, idxLend, StatusSkipped)
@@ -267,11 +277,11 @@ func TestSessionMarkRejections(t *testing.T) {
 	if _, err := s.SetType(i, ""); err == nil {
 		t.Error("SetType accepted empty type")
 	}
-	if err := s.SetTarget(i, 3, 7); err == nil {
-		t.Error("SetTarget accepted whitespace-padded span")
+	if err := s.SetSpan(i, "target", 3, 7); err == nil {
+		t.Error("SetSpan accepted whitespace-padded span")
 	}
-	if err := s.SetTarget(i, 4, 99); err == nil {
-		t.Error("SetTarget accepted out-of-range span")
+	if err := s.SetSpan(i, "target", 4, 99); err == nil {
+		t.Error("SetSpan accepted out-of-range span")
 	}
 	if s.Dirty(i) {
 		t.Errorf("failed edits left a draft: %+v", s.Draft(i))
@@ -421,7 +431,7 @@ func TestSessionReviseRecord(t *testing.T) {
 	mustMark(t, s, idxLend, StatusComplete)
 	mustMark(t, s, idxUncertain, StatusUncertain)
 
-	if d := s.Draft(idxLend); d.Type != "lend" || d.Target == nil || s.Dirty(idxLend) {
+	if d := s.Draft(idxLend); d.Type != "lend" || d.Spans["target"] == nil || s.Dirty(idxLend) {
 		t.Fatalf("draft of saved label = %+v dirty=%v", d, s.Dirty(idxLend))
 	}
 	mustSetType(t, s, idxLend, "borrow")
@@ -443,7 +453,7 @@ func TestSessionDraftsAndDirty(t *testing.T) {
 	f := newFixture(t, "")
 	s := f.open(t)
 	i := idxLend
-	if d := s.Draft(i); d != (Draft{}) || s.Dirty(i) {
+	if d := s.Draft(i); !isEmptyDraft(d) || s.Dirty(i) {
 		t.Fatalf("fresh draft = %+v dirty=%v", d, s.Dirty(i))
 	}
 	mustSetType(t, s, i, "lend")
@@ -451,7 +461,7 @@ func TestSessionDraftsAndDirty(t *testing.T) {
 		t.Error("SetType did not dirty the record")
 	}
 	s.DiscardDraft(i)
-	if s.Dirty(i) || s.Draft(i) != (Draft{}) {
+	if s.Dirty(i) || !isEmptyDraft(s.Draft(i)) {
 		t.Error("DiscardDraft kept the draft")
 	}
 
@@ -463,9 +473,11 @@ func TestSessionDraftsAndDirty(t *testing.T) {
 	if s.Dirty(i) {
 		t.Error("draft equal to saved label reported dirty")
 	}
-	s.ClearTarget(i)
-	if !s.Dirty(i) || s.Draft(i).Target != nil {
-		t.Errorf("ClearTarget: draft = %+v dirty=%v", s.Draft(i), s.Dirty(i))
+	if err := s.ClearSpan(i, "target"); err != nil {
+		t.Fatalf("ClearSpan: %v", err)
+	}
+	if !s.Dirty(i) || s.Draft(i).Spans["target"] != nil {
+		t.Errorf("ClearSpan: draft = %+v dirty=%v", s.Draft(i), s.Dirty(i))
 	}
 	mustSetTarget(t, s, i, 4, 7)
 	if s.Dirty(i) {
@@ -476,16 +488,16 @@ func TestSessionDraftsAndDirty(t *testing.T) {
 		t.Error("changed target not dirty")
 	}
 	s.DiscardDraft(i)
-	if d := s.Draft(i); d.Type != "lend" || *d.Target != (Target{Text: "Nam", Start: 4, End: 7}) {
+	if d := s.Draft(i); d.Type != "lend" || *d.Spans["target"] != (Target{Text: "Nam", Start: 4, End: 7}) {
 		t.Errorf("DiscardDraft: draft = %+v, want saved values", d)
 	}
 
 	// Returned drafts and labels are copies.
 	d := s.Draft(i)
-	d.Target.Text = "mutated"
+	d.Spans["target"].Text = "mutated"
 	l, _ := s.Label(i)
-	l.Target.Text = "mutated"
-	if s.Draft(i).Target.Text != "Nam" || s.Dirty(i) {
+	l.Spans["target"].Text = "mutated"
+	if s.Draft(i).Spans["target"].Text != "Nam" || s.Dirty(i) {
 		t.Error("mutating a returned target changed session state")
 	}
 }
@@ -763,14 +775,18 @@ func (f fixture) savedLabels(t *testing.T) (labels map[string]Label, n int) {
 	if err != nil {
 		t.Fatalf("read out: %v", err)
 	}
+	schema, err := LoadSchema(f.schema)
+	if err != nil {
+		t.Fatalf("load schema: %v", err)
+	}
 	labels = map[string]Label{}
 	for line := range strings.SplitSeq(string(data), "\n") {
 		if line == "" {
 			continue
 		}
 		n++
-		var l Label
-		if err := json.Unmarshal([]byte(line), &l); err != nil {
+		l, err := decodeLabel(schema, []byte(line))
+		if err != nil {
 			t.Fatalf("parse %q: %v", line, err)
 		}
 		if _, dup := labels[l.ID]; dup {
@@ -880,7 +896,7 @@ func TestSessionReviseLabeledRecord(t *testing.T) {
 				t.Fatalf("labels file has %d lines / %d ids, want 3 (one per labeled id)", n, len(labels))
 			}
 			got := labels["case-lend"]
-			if got.Status != tt.status || got.Type == nil || *got.Type != tt.wantType || !reflect.DeepEqual(got.Target, tt.wantTarget) {
+			if got.Status != tt.status || got.Type == nil || *got.Type != tt.wantType || !reflect.DeepEqual(got.Spans["target"], tt.wantTarget) {
 				t.Errorf("revised label = %+v (type %v), want %s %s %+v", got, got.Type, tt.status, tt.wantType, tt.wantTarget)
 			}
 			if c := s.Counts(); c.Remaining != 4 {
@@ -945,7 +961,7 @@ func TestSessionUndo(t *testing.T) {
 			t.Errorf("labels file after undo = %q, want %q", lines, st.wantFile)
 		}
 		if st.desc == "restored complete" {
-			if l, ok := s.Label(idxLend); !ok || l.Status != StatusComplete || *l.Type != "lend" || l.Target == nil || *l.Target != (Target{Text: "Nam", Start: 4, End: 7}) {
+			if l, ok := s.Label(idxLend); !ok || l.Status != StatusComplete || *l.Type != "lend" || l.Spans["target"] == nil || *l.Spans["target"] != (Target{Text: "Nam", Start: 4, End: 7}) {
 				t.Errorf("restored label = %+v, want complete lend Nam", l)
 			}
 		}

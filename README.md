@@ -76,6 +76,35 @@ To re-check a subset of an existing labels file, open the subset queue with `--l
 quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
 ```
 
+### Multiple span fields
+
+A schema may declare several named span fields with `spans:`, so one pass labels the type and every
+span (for example a counterparty and an amount) instead of a single `target`:
+
+```yaml
+spans:                              # optional; YAML order = tab order and label key order
+  target:
+    description: Counterparty. Minimal span as typed.
+    null_for_types: [transfer]      # this span must be null for these types
+  value:
+    description: Monetary amount. Exact substring, no normalization.
+    statuses: [complete, uncertain] # optional per-span status; the first is the default
+```
+
+Each label gets one top-level key per span (`{"text","start","end"}` or `null`) and, when a span
+declares `statuses`, a `span_status` object:
+
+```json
+{"id":"ms-001","annotation_status":"complete","type":"expense","target":{"text":"Vinamilk","start":10,"end":18},"value":{"text":"500k","start":23,"end":27},"span_status":{"value":"complete"}}
+```
+
+`tab` / `shift+tab` cycle the active field, `x` and `n` select or null it, and `c` cycles its span
+status; `--proposals` takes the same per-field keys. Schemas without `spans:` (one implicit `target`,
+`null_target_types`) and their labels and proposals files behave exactly as before. `spans:` cannot be
+combined with `null_target_types`. See
+[`schema-multispan.yaml`](examples/annotation/schema-multispan.yaml) and
+[Multiple span fields](docs/annotating.md#multiple-span-fields).
+
 ### Proposals
 
 `--proposals <proposals.jsonl>` adds advisory AI suggestions next to each record's current
@@ -98,15 +127,16 @@ The proposals file is never written, nothing is saved without `p`, `enter`, `u` 
 label is never overwritten automatically, `confidence` and `reason` are never written to the labels
 file, and re-check merge semantics are unchanged.
 
-See [Annotating](docs/annotating.md) and its [Re-check subset](docs/annotating.md#re-check-subset)
-and [Proposals](docs/annotating.md#proposals) sections.
+See [Annotating](docs/annotating.md) and its [Re-check subset](docs/annotating.md#re-check-subset),
+[Proposals](docs/annotating.md#proposals) and
+[Multiple span fields](docs/annotating.md#multiple-span-fields) sections.
 
 ## Documentation
 
 | | |
 | --- | --- |
 | [Usage](docs/usage.md) | Command line, file browser, `init`, `stats`, `update` |
-| [Annotating](docs/annotating.md) | `quet annotate`: schemas, labels output, validation, re-check subsets, proposals, span keys, offsets |
+| [Annotating](docs/annotating.md) | `quet annotate`: schemas, multiple span fields, labels output, validation, re-check subsets, proposals, span keys, offsets |
 | [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
 | [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |

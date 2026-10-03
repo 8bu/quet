@@ -58,6 +58,8 @@ type annotModel struct {
 	filters filterChooser
 	span    spanSel
 
+	activeSpan int // index into Schema().Spans of the field x, n, c and enter act on
+
 	gotoQuery []rune // annotGoto input: a 1-based queue position or a record id
 }
 
@@ -99,6 +101,27 @@ func (m annotModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model.
 func (m annotModel) View() string { return m.view() }
+
+// multiSpan reports whether the schema declares more than one span field.
+func (m annotModel) multiSpan() bool { return len(m.sess.Schema().Spans) > 1 }
+
+// spanUI reports whether the schema needs the multi-field wording and keys: it
+// declares several span fields or per-span statuses. Without that the
+// annotation screen reads exactly as for a single implicit target.
+func (m annotModel) spanUI() bool {
+	return m.multiSpan() || m.sess.Schema().HasSpanStatuses()
+}
+
+// active returns the span field the field keys act on.
+func (m annotModel) active() annotate.SpanDef { return m.sess.Schema().Spans[m.activeSpan] }
+
+// cycleSpan moves the active field by delta (+1 tab, -1 shift+tab), wrapping. It
+// is a no-op with a single span field.
+func (m annotModel) cycleSpan(delta int) annotModel {
+	n := len(m.sess.Schema().Spans)
+	m.activeSpan = ((m.activeSpan+delta)%n + n) % n
+	return m
+}
 
 // typeChooser is the state of the type picker: a fuzzy query and the cursor
 // among the matching schema types.

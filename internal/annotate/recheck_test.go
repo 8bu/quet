@@ -33,7 +33,7 @@ func recheckLabel(t *testing.T, i int) Label {
 		if err != nil {
 			t.Fatal(err)
 		}
-		l.Status, l.Type, l.Target = StatusComplete, new("alpha"), &target
+		l.Status, l.Type, l.Spans = StatusComplete, new("alpha"), tgt(&target)
 	case 1:
 		l.Status, l.Type = StatusComplete, new("gamma")
 	case 2:
@@ -51,8 +51,12 @@ func recheckLine(t *testing.T, i int) string {
 	if i%7 == 0 {
 		return fmt.Sprintf(`{"id": "%s", "annotation_status": "skipped", "type": null, "target": null, "note": "\u0103n"}`, recheckID(i))
 	}
+	schema, err := ParseSchema([]byte(recheckSchema))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var buf bytes.Buffer
-	if err := encodeLabel(newLabelEncoder(&buf), recheckID(i), recheckLabel(t, i)); err != nil {
+	if err := encodeLabel(&buf, schema, recheckID(i), recheckLabel(t, i)); err != nil {
 		t.Fatal(err)
 	}
 	return strings.TrimSuffix(buf.String(), "\n")

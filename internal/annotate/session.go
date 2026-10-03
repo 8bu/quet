@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,10 +69,11 @@ func (s *Session) ParseFilter(name string) (Filter, error) {
 	return 0, fmt.Errorf("unknown filter %q (want one of %s)", name, strings.Join(names, ", "))
 }
 
-// Draft is the editable type/target of one record: pending edits, else the saved label's values.
+// Draft is the editable type, spans and span statuses of one record: pending edits, else the saved label's values.
 type Draft struct {
-	Type   string  // "" = none
-	Target *Target // nil = null target
+	Type       string             // "" = none
+	Spans      map[string]*Target // missing or nil = null span
+	SpanStatus map[string]string  // missing = unset (Mark applies the span's default)
 }
 
 // Counts summarises annotation progress. Other = labels with another schema status; Remaining = Total - labeled.
@@ -111,7 +113,7 @@ type recheckState struct {
 type undoEntry struct {
 	index int   // queue index of the marked record
 	had   bool  // the record had a saved label before the mark
-	prev  Label // that label (Target copied)
+	prev  Label // that label (deep copied)
 }
 
 // Open loads schema, queue and existing labels (resume) for a normal session writing outPath (LoadLabels: a missing
@@ -254,32 +256,38 @@ func (s *Session) Len() int { return len(s.items) }
 // Item returns queue record i.
 func (s *Session) Item(i int) Item { return s.items[i] }
 
-// Label returns the saved label of record i, if any.
+// Label returns a deep copy of the saved label of record i, if any.
 func (s *Session) Label(i int) (Label, bool) {
 	l, ok := s.labels[s.items[i].ID]
 	if ok {
-		l.Target = copyTarget(l.Target)
+		l = copyLabel(l)
 	}
 	return l, ok
 }
 
-// Draft returns the editable type/target of record i: pending edits, else the saved label's values.
+// Draft returns a deep copy of the editable type, spans and span statuses of record i: pending edits, else the saved
+// label's values. Its Spans map is never nil.
 func (s *Session) Draft(i int) Draft {
 	d, ok := s.drafts[i]
 	if !ok {
 		d = s.savedDraft(i)
 	}
-	d.Target = copyTarget(d.Target)
+	d.Spans = copySpans(d.Spans)
+	if d.Spans == nil {
+		d.Spans = map[string]*Target{}
+	}
+	d.SpanStatus = copySpanStatus(d.SpanStatus)
 	return d
 }
 
-// savedDraft returns the saved label's type/target of record i (zero Draft when unlabeled).
+// savedDraft returns the saved label's type, spans and span statuses of record i (zero Draft when unlabeled). Its
+// maps are the label's own: copy before mutating.
 func (s *Session) savedDraft(i int) Draft {
 	l, ok := s.labels[s.items[i].ID]
 	if !ok {
 		return Draft{}
 	}
-	d := Draft{Target: l.Target}
+	d := Draft{Spans: l.Spans, SpanStatus: l.SpanStatus}
 	if l.Type != nil {
 		d.Type = *l.Type
 	}
@@ -289,7 +297,7 @@ func (s *Session) savedDraft(i int) Draft {
 // Dirty reports whether the draft of record i differs from the saved label (or from empty when unlabeled).
 func (s *Session) Dirty(i int) bool {
 	d, ok := s.drafts[i]
-	return ok && !draftEqual(d, s.savedDraft(i))
+	return ok && !s.draftEqual(d, s.savedDraft(i))
 }
 
 // DiscardDraft drops pending edits of record i.
@@ -297,64 +305,155 @@ func (s *Session) DiscardDraft(i int) { delete(s.drafts, i) }
 
 // setDraft stores d as the draft of record i, or drops it when it equals the saved values.
 func (s *Session) setDraft(i int, d Draft) {
-	if draftEqual(d, s.savedDraft(i)) {
+	if s.draftEqual(d, s.savedDraft(i)) {
 		delete(s.drafts, i)
 		return
 	}
 	s.drafts[i] = d
 }
 
-// SetType sets the draft type. Unknown type → error. If typ is a null-target type and the draft has a target,
-// the target is cleared and cleared=true.
-func (s *Session) SetType(i int, typ string) (cleared bool, err error) {
+// SetType sets the draft type. Unknown type → error. Every span that is null for typ loses its draft span status;
+// those that had a value lose it too, and cleared lists their names in schema order.
+func (s *Session) SetType(i int, typ string) (cleared []string, err error) {
 	if !s.schema.HasType(typ) {
-		return false, fmt.Errorf("type %q is not declared in the schema", typ)
+		return nil, fmt.Errorf("type %q is not declared in the schema", typ)
 	}
 	d := s.Draft(i)
 	d.Type = typ
-	if s.schema.NullTarget(typ) && d.Target != nil {
-		d.Target = nil
-		cleared = true
+	for _, sp := range s.schema.Spans {
+		if !s.schema.NullSpan(sp.Name, typ) {
+			continue
+		}
+		if d.Spans[sp.Name] != nil {
+			d.Spans[sp.Name] = nil
+			cleared = append(cleared, sp.Name)
+		}
+		delete(d.SpanStatus, sp.Name)
 	}
 	s.setDraft(i, d)
 	return cleared, nil
 }
 
-// SetTarget sets the draft target to runes [start,end). Errors: invalid span (SpanTarget), draft type is a
-// null-target type.
-func (s *Session) SetTarget(i int, start, end int) error {
+// declaredSpan returns the span called name, or an error when the schema does not declare it.
+func (s *Session) declaredSpan(name string) (SpanDef, error) {
+	sp, ok := s.schema.Span(name)
+	if !ok {
+		return SpanDef{}, fmt.Errorf("span %q is not declared in the schema", name)
+	}
+	return sp, nil
+}
+
+// SetSpan sets the draft value of the span called name to runes [start,end). Errors: unknown span, draft type is
+// null for the span, invalid span (SpanTarget).
+func (s *Session) SetSpan(i int, name string, start, end int) error {
+	if _, err := s.declaredSpan(name); err != nil {
+		return err
+	}
 	d := s.Draft(i)
-	if d.Type != "" && s.schema.NullTarget(d.Type) {
-		return fmt.Errorf("type %q must have a null target", d.Type)
+	if s.schema.NullSpan(name, d.Type) {
+		return fmt.Errorf("type %q must have a null %s", d.Type, name)
 	}
 	t, err := SpanTarget(s.items[i].Text, start, end)
 	if err != nil {
 		return err
 	}
-	d.Target = &t
+	if d.Spans == nil {
+		d.Spans = map[string]*Target{}
+	}
+	d.Spans[name] = &t
 	s.setDraft(i, d)
 	return nil
 }
 
-// ClearTarget sets the draft target of record i to null.
-func (s *Session) ClearTarget(i int) {
+// ClearSpan sets the draft value of the span called name of record i to null (its span status is kept). Unknown span
+// → error.
+func (s *Session) ClearSpan(i int, name string) error {
+	if _, err := s.declaredSpan(name); err != nil {
+		return err
+	}
 	d := s.Draft(i)
-	d.Target = nil
+	d.Spans[name] = nil
 	s.setDraft(i, d)
+	return nil
 }
 
-// Mark saves the draft as a label with status: builds Label (existing Note preserved; type and target dropped when
-// the schema lists status in null_label_statuses), Validate, write file atomically (save); on write failure the
-// in-memory label is restored. Success: draft dropped, session mark count +1, the replaced label (or its absence)
-// pushed on the undo stack. An existing label is overwritten in place, so the file keeps one line per id. Does NOT
-// move the cursor.
+// statusSpan returns the span called name when its draft status can be edited under draft type typ. Errors: unknown
+// span, a span without statuses, a span that is null for typ.
+func (s *Session) statusSpan(name, typ string) (SpanDef, error) {
+	sp, err := s.declaredSpan(name)
+	if err != nil {
+		return SpanDef{}, err
+	}
+	if len(sp.Statuses) == 0 {
+		return SpanDef{}, fmt.Errorf("span %s declares no statuses", name)
+	}
+	if s.schema.NullSpan(name, typ) {
+		return SpanDef{}, fmt.Errorf("type %q must have a null %s, which has no status", typ, name)
+	}
+	return sp, nil
+}
+
+// SetSpanStatus sets the draft status of the span called name. Errors: unknown span, a span that declares no
+// statuses, a status not in the span's list, a span that is null for the draft type.
+func (s *Session) SetSpanStatus(i int, name, status string) error {
+	d := s.Draft(i)
+	sp, err := s.statusSpan(name, d.Type)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(sp.Statuses, status) {
+		return fmt.Errorf("status %q is not one of [%s] for span %s", status, strings.Join(sp.Statuses, ", "), name)
+	}
+	if d.SpanStatus == nil {
+		d.SpanStatus = map[string]string{}
+	}
+	d.SpanStatus[name] = status
+	s.setDraft(i, d)
+	return nil
+}
+
+// CycleSpanStatus advances the draft status of the span called name to the next one in the span's list, wrapping
+// (from the effective status: unset counts as the first listed status), and returns it. Errors as SetSpanStatus.
+func (s *Session) CycleSpanStatus(i int, name string) (string, error) {
+	d := s.Draft(i)
+	sp, err := s.statusSpan(name, d.Type)
+	if err != nil {
+		return "", err
+	}
+	cur, _ := s.schema.effectiveSpanStatus(sp, d)
+	next := sp.Statuses[(slices.Index(sp.Statuses, cur)+1)%len(sp.Statuses)]
+	if d.SpanStatus == nil {
+		d.SpanStatus = map[string]string{}
+	}
+	d.SpanStatus[name] = next
+	s.setDraft(i, d)
+	return next, nil
+}
+
+// SpanStatus returns the effective status of the span called name in the draft of record i and whether it is the
+// default (the draft has none set, so Mark would use the span's first listed status). status is "" when the span is
+// unknown, declares no statuses or is null for the draft type.
+func (s *Session) SpanStatus(i int, name string) (status string, isDefault bool) {
+	sp, ok := s.schema.Span(name)
+	if !ok {
+		return "", false
+	}
+	return s.schema.effectiveSpanStatus(sp, s.Draft(i))
+}
+
+// Mark saves the draft as a label with status: builds Label (existing Note preserved; type, spans and span statuses
+// dropped when the schema lists status in null_label_statuses; otherwise spans null for the draft type forced null
+// and every status-bearing span that is not null for the type given its draft status or the default), Validate,
+// write file atomically (save); on write failure the in-memory label is restored. Success: draft dropped, session
+// mark count +1, the replaced label (or its absence) pushed on the undo stack. An existing label is overwritten in
+// place, so the file keeps one line per id. Does NOT move the cursor.
 func (s *Session) Mark(i int, status string) error {
 	return s.mark(i, status, s.Draft(i), "")
 }
 
-// mark is the save path shared by Mark and AcceptProposal: it builds the label of record i from status, the type and
-// target of d and note (the existing saved note when note is empty), then validates, saves, drops the draft, counts
-// the mark and pushes the undo entry. Nothing changes on error.
+// mark is the save path shared by Mark and AcceptProposal: it builds the label of record i from status, the type,
+// spans and span statuses of d and note (the existing saved note when note is empty), then validates, saves, drops
+// the draft, counts the mark and pushes the undo entry. Nothing changes on error.
 func (s *Session) mark(i int, status string, d Draft, note string) error {
 	if !s.schema.HasStatus(status) {
 		return fmt.Errorf("status %q is not declared in the schema", status)
@@ -364,11 +463,23 @@ func (s *Session) mark(i int, status string, d Draft, note string) error {
 	if note == "" {
 		note = prev.Note
 	}
-	l := Label{ID: item.ID, Status: status, Target: d.Target, Note: note}
-	if s.schema.NullLabel(status) {
-		l.Target = nil
-	} else if d.Type != "" {
+	l := Label{ID: item.ID, Status: status, Spans: make(map[string]*Target, len(s.schema.Spans)), Note: note}
+	nullLabel := s.schema.NullLabel(status)
+	if !nullLabel && d.Type != "" {
 		l.Type = new(d.Type)
+	}
+	for _, sp := range s.schema.Spans {
+		l.Spans[sp.Name] = nil
+		if nullLabel || s.schema.NullSpan(sp.Name, d.Type) {
+			continue
+		}
+		l.Spans[sp.Name] = copyTarget(d.Spans[sp.Name])
+		if st, _ := s.schema.effectiveSpanStatus(sp, d); st != "" {
+			if l.SpanStatus == nil {
+				l.SpanStatus = map[string]string{}
+			}
+			l.SpanStatus[sp.Name] = st
+		}
 	}
 	if err := s.schema.Validate(l, item.Text); err != nil {
 		return err
@@ -378,8 +489,7 @@ func (s *Session) mark(i int, status string, d Draft, note string) error {
 		s.restoreLabel(item.ID, had, prev)
 		return err
 	}
-	prev.Target = copyTarget(prev.Target)
-	s.undo = append(s.undo, undoEntry{index: i, had: had, prev: prev})
+	s.undo = append(s.undo, undoEntry{index: i, had: had, prev: copyLabel(prev)})
 	delete(s.drafts, i)
 	s.marked++
 	return nil
@@ -398,9 +508,9 @@ func (s *Session) restoreLabel(id string, had bool, prev Label) {
 // written file becomes the new baseline.
 func (s *Session) save() error {
 	if s.recheck == nil {
-		return WriteLabels(s.outPath, s.items, s.labels)
+		return WriteLabels(s.outPath, s.schema, s.items, s.labels)
 	}
-	base, err := writeMergedLabels(s.outPath, s.recheck.orig, s.recheck.base, s.items, s.labels)
+	base, err := writeMergedLabels(s.outPath, s.schema, s.recheck.orig, s.recheck.base, s.items, s.labels)
 	if err != nil {
 		return err
 	}
@@ -642,22 +752,30 @@ func (s *Session) SetClock(now func() time.Time) {
 	s.start = now()
 }
 
-// draftEqual reports whether a and b have the same type and target.
-func draftEqual(a, b Draft) bool {
-	if a.Type != b.Type {
+// draftEqual reports whether a and b have the same type, the same spans (a missing span equals a null one) and the
+// same effective span status for every span (an unset status equals the span's default).
+func (s *Session) draftEqual(a, b Draft) bool {
+	if a.Type != b.Type || !spansEqual(a.Spans, b.Spans) {
 		return false
 	}
-	if a.Target == nil || b.Target == nil {
-		return a.Target == nil && b.Target == nil
+	for _, sp := range s.schema.Spans {
+		as, _ := s.schema.effectiveSpanStatus(sp, a)
+		bs, _ := s.schema.effectiveSpanStatus(sp, b)
+		if as != bs {
+			return false
+		}
 	}
-	return *a.Target == *b.Target
+	return true
 }
 
-// copyTarget returns a copy of t so callers cannot mutate session state through it.
-func copyTarget(t *Target) *Target {
-	if t == nil {
-		return nil
+// effectiveSpanStatus returns the status of span sp in draft d: the draft's entry, else the span's first listed status
+// (isDefault). It is "" when sp declares no statuses or is null for d's type.
+func (s *Schema) effectiveSpanStatus(sp SpanDef, d Draft) (status string, isDefault bool) {
+	if len(sp.Statuses) == 0 || s.NullSpan(sp.Name, d.Type) {
+		return "", false
 	}
-	c := *t
-	return &c
+	if st, ok := d.SpanStatus[sp.Name]; ok {
+		return st, false
+	}
+	return sp.Statuses[0], true
 }

@@ -65,14 +65,14 @@ func TestLoadProposals(t *testing.T) {
 	}
 	conf := 0.75
 	want := Proposal{
-		ID: "case-lend", Status: StatusComplete, Type: new("lend"), Target: &Target{Text: "Nam", Start: 4, End: 7},
+		ID: "case-lend", Status: StatusComplete, Type: new("lend"), Spans: tgt(&Target{Text: "Nam", Start: 4, End: 7}),
 		Note: "nợ", Confidence: &conf, Reason: "vay -> lend",
 	}
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("Proposal = %+v, want %+v", p, want)
 	}
 	u, ok := s.Proposal(idxUncertain)
-	if !ok || u.Status != StatusUncertain || u.Type != nil || u.Target != nil || u.Confidence != nil || u.Note != "" || u.Reason != "" {
+	if !ok || u.Status != StatusUncertain || u.Type != nil || u.Spans["target"] != nil || u.Confidence != nil || u.Note != "" || u.Reason != "" {
 		t.Errorf("uncertain Proposal = %+v, %v", u, ok)
 	}
 	if _, ok := s.Proposal(idxExpense); ok {
@@ -80,7 +80,7 @@ func TestLoadProposals(t *testing.T) {
 	}
 
 	// Proposal returns a copy: mutating it changes nothing.
-	*p.Type, p.Target.Text, *p.Confidence = "x", "x", 0
+	*p.Type, p.Spans["target"].Text, *p.Confidence = "x", "x", 0
 	if again, _ := s.Proposal(idxLend); !reflect.DeepEqual(again, want) {
 		t.Errorf("Proposal after mutating a copy = %+v", again)
 	}
@@ -214,7 +214,7 @@ func TestAcceptProposal(t *testing.T) {
 	if !ok || l.Status != StatusComplete || *l.Type != "lend" || l.Note != "nợ" || s.Dirty(idxLend) {
 		t.Errorf("label = %+v, %v, dirty=%v", l, ok, s.Dirty(idxLend))
 	}
-	if d := s.Draft(idxLend); d.Type != "lend" || d.Target == nil {
+	if d := s.Draft(idxLend); d.Type != "lend" || d.Spans["target"] == nil {
 		t.Errorf("draft after accept = %+v", d)
 	}
 
@@ -349,7 +349,7 @@ func TestApplyProposalInvalid(t *testing.T) {
 	if err := s.ApplyProposal(idxExpense); err != nil {
 		t.Errorf("ApplyProposal with an unusable status: %v", err)
 	}
-	if d := s.Draft(idxExpense); d.Type != "expense" || d.Target == nil || d.Target.Text != "Pizza 4P" {
+	if d := s.Draft(idxExpense); d.Type != "expense" || d.Spans["target"] == nil || d.Spans["target"].Text != "Pizza 4P" {
 		t.Errorf("draft = %+v", d)
 	}
 }
@@ -365,7 +365,7 @@ func TestApplyProposal(t *testing.T) {
 	if err := s.ApplyProposal(idxLend); err != nil {
 		t.Fatalf("ApplyProposal: %v", err)
 	}
-	if d := s.Draft(idxLend); d.Type != "lend" || d.Target == nil || *d.Target != *want.Target || !s.Dirty(idxLend) {
+	if d := s.Draft(idxLend); d.Type != "lend" || d.Spans["target"] == nil || *d.Spans["target"] != *want.Spans["target"] || !s.Dirty(idxLend) {
 		t.Errorf("draft = %+v dirty=%v", d, s.Dirty(idxLend))
 	}
 	if _, err := os.Stat(f.out); !errors.Is(err, fs.ErrNotExist) {
@@ -403,7 +403,7 @@ func TestApplyProposalNullTargetType(t *testing.T) {
 	if err := s.ApplyProposal(idxTransfer); err != nil {
 		t.Fatalf("ApplyProposal: %v", err)
 	}
-	if d := s.Draft(idxTransfer); d.Type != "transfer" || d.Target != nil {
+	if d := s.Draft(idxTransfer); d.Type != "transfer" || d.Spans["target"] != nil {
 		t.Errorf("draft = %+v, want transfer with a null target", d)
 	}
 	mustMark(t, s, idxTransfer, StatusComplete)

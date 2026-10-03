@@ -8,19 +8,21 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Proposal is one advisory suggested label for a queue record, loaded from a proposals file. It is never
-// persisted: Confidence and Reason are shown to the reviewer only, and only Status, Type, Target and Note can
-// reach the labels file, through AcceptProposal.
+// persisted: Confidence and Reason are shown to the reviewer only, and only Status, Type, Spans, SpanStatus and
+// Note can reach the labels file, through AcceptProposal.
 type Proposal struct {
 	ID         string
 	Status     string
-	Type       *string  // nil = no type
-	Target     *Target  // nil = null target
-	Note       string   // "" = none
-	Confidence *float64 // nil = not given; otherwise within [0,1]
-	Reason     string   // "" = none
+	Type       *string            // nil = no type
+	Spans      map[string]*Target // one entry per declared span; nil value = null
+	SpanStatus map[string]string  // nil = none given
+	Note       string             // "" = none
+	Confidence *float64           // nil = not given; otherwise within [0,1]
+	Reason     string             // "" = none
 }
 
 // proposalSet is the proposals of a session: those for queue records by queue index, and the ids of the rest.
@@ -32,13 +34,15 @@ type proposalSet struct {
 
 // LoadProposals loads the advisory proposals JSONL at path into the session; call it once after Open or
 // OpenRecheck. Each non-blank line is an object with a non-empty string id and a string annotation_status, and
-// optionally type (string or null), target (null or an object decoded like a label's target), note (string),
+// optionally type (string or null), one member per declared span (null, absent = null, or an object decoded like
+// a label's span), span_status (an object of strings; read only when some span declares statuses), note (string),
 // confidence (number in [0,1]) and reason (string); null optional members count as absent and other members are
-// ignored. Proposals are not schema-validated here (ProposalProblem does that per record). Errors, all refusing to
-// load: a missing file, a path that is the queue or the labels file, invalid JSON, a missing or ill-typed member,
-// a bad target shape, a confidence out of range and a duplicate id, each citing "proposals <path>:<line>". ids not
-// in the queue are not an error: they are dropped and returned sorted (also IgnoredProposals). The file is never
-// written.
+// ignored. A span named reason or confidence
+// takes that member (the proposal then has no such confidence or reason). Proposals are not schema-validated here
+// (ProposalProblem does that per record). Errors, all refusing to load: a missing file, a path that is the queue
+// or the labels file, invalid JSON, a missing or ill-typed member, a bad span shape, a confidence out of range
+// and a duplicate id, each citing "proposals <path>:<line>". ids not in the queue are not an error: they are
+// dropped and returned sorted (also IgnoredProposals). The file is never written.
 func (s *Session) LoadProposals(path string) (ignored []string, err error) {
 	if s.proposals != nil {
 		return nil, fmt.Errorf("proposals already loaded from %s", s.proposals.path)
@@ -57,7 +61,7 @@ func (s *Session) LoadProposals(path string) (ignored []string, err error) {
 	set := &proposalSet{path: path, byIndex: map[int]Proposal{}}
 	firstLine := map[string]int{}
 	err = forEachLine(data, func(lineNo int, line []byte) error {
-		p, err := decodeProposal(line)
+		p, err := decodeProposal(s.schema, line)
 		if err != nil {
 			return err
 		}
@@ -124,8 +128,8 @@ func sameFile(a, b string) (bool, error) {
 	return os.SameFile(ai, bi), nil
 }
 
-// decodeProposal decodes one proposal line as described at LoadProposals.
-func decodeProposal(line []byte) (Proposal, error) {
+// decodeProposal decodes one proposal line under schema as described at LoadProposals.
+func decodeProposal(schema *Schema, line []byte) (Proposal, error) {
 	fields, err := decodeObject(line)
 	if err != nil {
 		return Proposal{}, err
@@ -147,28 +151,42 @@ func decodeProposal(line []byte) (Proposal, error) {
 		}
 		p.Type = &typ
 	}
-	if raw, ok := fields["target"]; ok && !isJSONNull(raw) {
-		t, err := decodeTarget(raw)
-		if err != nil {
+	p.Spans = make(map[string]*Target, len(schema.Spans))
+	for _, sp := range schema.Spans {
+		p.Spans[sp.Name] = nil
+		if raw, ok := fields[sp.Name]; ok && !isJSONNull(raw) {
+			t, err := decodeTarget(sp.Name, raw)
+			if err != nil {
+				return Proposal{}, err
+			}
+			p.Spans[sp.Name] = &t
+		}
+	}
+	if raw, ok := fields["span_status"]; ok && !isJSONNull(raw) && schema.HasSpanStatuses() {
+		if p.SpanStatus, err = decodeSpanStatus(raw); err != nil {
 			return Proposal{}, err
 		}
-		p.Target = &t
 	}
 	if p.Note, err = optionalString(fields, "note"); err != nil {
 		return Proposal{}, err
 	}
-	if p.Reason, err = optionalString(fields, "reason"); err != nil {
-		return Proposal{}, err
+	// A span named reason or confidence owns that member.
+	if _, isSpan := schema.Span("reason"); !isSpan {
+		if p.Reason, err = optionalString(fields, "reason"); err != nil {
+			return Proposal{}, err
+		}
 	}
 	if raw, ok := fields["confidence"]; ok && !isJSONNull(raw) {
-		var c float64
-		if err := json.Unmarshal(raw, &c); err != nil {
-			return Proposal{}, errors.New("confidence: expected a number")
+		if _, isSpan := schema.Span("confidence"); !isSpan {
+			var c float64
+			if err := json.Unmarshal(raw, &c); err != nil {
+				return Proposal{}, errors.New("confidence: expected a number")
+			}
+			if c < 0 || c > 1 {
+				return Proposal{}, fmt.Errorf("confidence: %v is outside 0..1", c)
+			}
+			p.Confidence = &c
 		}
-		if c < 0 || c > 1 {
-			return Proposal{}, fmt.Errorf("confidence: %v is outside 0..1", c)
-		}
-		p.Confidence = &c
 	}
 	return p, nil
 }
@@ -222,21 +240,23 @@ func (s *Session) Proposal(i int) (Proposal, bool) {
 	if p.Type != nil {
 		p.Type = new(*p.Type)
 	}
-	p.Target = copyTarget(p.Target)
+	p.Spans = copySpans(p.Spans)
+	p.SpanStatus = copySpanStatus(p.SpanStatus)
 	if p.Confidence != nil {
 		p.Confidence = new(*p.Confidence)
 	}
 	return p, true
 }
 
-// proposalLabel returns the label a proposal states for record i: its own status, type and target, with no note
-// and no null_label_statuses clearing. Callers must own p (Proposal returns a copy).
+// proposalLabel returns the label a proposal states for record i: its own status, type, spans and span statuses,
+// with no note and no null_label_statuses clearing. Callers must own p (Proposal returns a copy).
 func (s *Session) proposalLabel(i int, p Proposal) Label {
-	return Label{ID: s.items[i].ID, Status: p.Status, Type: p.Type, Target: p.Target}
+	return Label{ID: s.items[i].ID, Status: p.Status, Type: p.Type, Spans: p.Spans, SpanStatus: p.SpanStatus}
 }
 
 // ProposalProblem returns why the proposal for record i is not a valid label under the schema and the record
-// text (Validate on the proposal's own status, type and target), or nil when it is valid or there is no proposal.
+// text (Validate on the proposal's own status, type, spans and span statuses), or nil when it is valid or there is
+// no proposal.
 func (s *Session) ProposalProblem(i int) error {
 	p, ok := s.Proposal(i)
 	if !ok {
@@ -245,8 +265,8 @@ func (s *Session) ProposalProblem(i int) error {
 	return s.schema.Validate(s.proposalLabel(i, p), s.items[i].Text)
 }
 
-// ProposalMatches reports whether record i has both a proposal and a saved label and the proposal's status, type
-// and target equal the label's.
+// ProposalMatches reports whether record i has both a proposal and a saved label and the proposal's status, type,
+// spans and effective span statuses (an unset one is the span's default) equal the label's.
 func (s *Session) ProposalMatches(i int) bool {
 	p, ok := s.Proposal(i)
 	if !ok {
@@ -256,12 +276,15 @@ func (s *Session) ProposalMatches(i int) bool {
 	if !ok || p.Status != l.Status {
 		return false
 	}
-	return (p.Type == nil) == (l.Type == nil) && draftEqual(proposalDraft(p), s.savedDraft(i))
+	return (p.Type == nil) == (l.Type == nil) && s.draftEqual(proposalDraft(p), s.savedDraft(i))
 }
 
-// proposalDraft returns the type and target of p as a Draft.
+// proposalDraft returns the type, spans and span statuses of p as a Draft; Spans is never nil.
 func proposalDraft(p Proposal) Draft {
-	d := Draft{Target: p.Target}
+	d := Draft{Spans: copySpans(p.Spans), SpanStatus: copySpanStatus(p.SpanStatus)}
+	if d.Spans == nil {
+		d.Spans = map[string]*Target{}
+	}
 	if p.Type != nil {
 		d.Type = *p.Type
 	}
@@ -269,11 +292,11 @@ func proposalDraft(p Proposal) Draft {
 }
 
 // AcceptProposal saves the proposal for record i as its label, exactly as Mark(i, status) would from a draft of the
-// proposal's type and target (so null_label_statuses clearing applies): the note is the proposal's when non-empty,
-// else the existing saved note. The proposal's own label is validated first (ProposalProblem) and refused with that
-// error when invalid, without touching the labels file. It replaces an existing saved label (Undo restores it),
-// drops the record's draft, and never writes the proposal's confidence or reason. Errors: no proposal for i, an
-// invalid proposal, and those of Mark.
+// proposal's type, spans and span statuses (so null_label_statuses clearing and default span statuses apply): the
+// note is the proposal's when non-empty, else the existing saved note. The proposal's own label is validated first
+// (ProposalProblem) and refused with that error when invalid, without touching the labels file. It replaces an
+// existing saved label (Undo restores it), drops the record's draft, and never writes the proposal's confidence or
+// reason. Errors: no proposal for i, an invalid proposal, and those of Mark.
 func (s *Session) AcceptProposal(i int) error {
 	p, ok := s.Proposal(i)
 	if !ok {
@@ -285,10 +308,11 @@ func (s *Session) AcceptProposal(i int) error {
 	return s.mark(i, p.Status, proposalDraft(p), p.Note)
 }
 
-// ApplyProposal loads the proposal's type and target into the draft of record i without saving: the type must be
-// declared, a target must be a valid span of the record text, and a null-target type gets a null target. The
-// status is not applied: the reviewer marks as usual. Errors: no proposal for i, an undeclared type, an invalid
-// target; the draft is unchanged on error.
+// ApplyProposal loads the proposal's type, spans and span statuses into the draft of record i without saving: the
+// type must be declared, a span must be a valid value in the record text, spans that are null for the type are
+// dropped (value and status), and the span statuses must be valid for their spans. The status is not applied: the
+// reviewer marks as usual. Errors: no proposal for i, an undeclared type, an invalid span or span status; the
+// draft is unchanged on error.
 func (s *Session) ApplyProposal(i int) error {
 	p, ok := s.Proposal(i)
 	if !ok {
@@ -298,13 +322,20 @@ func (s *Session) ApplyProposal(i int) error {
 	if p.Type != nil && !s.schema.HasType(*p.Type) {
 		return fmt.Errorf("proposal type %q is not declared in the schema", *p.Type)
 	}
-	if d.Type != "" && s.schema.NullTarget(d.Type) {
-		d.Target = nil
-	}
-	if d.Target != nil {
-		if problem := targetProblem(*d.Target, s.items[i].Text); problem != "" {
-			return fmt.Errorf("proposal %s", problem)
+	for _, sp := range s.schema.Spans {
+		if s.schema.NullSpan(sp.Name, d.Type) {
+			d.Spans[sp.Name] = nil
+			delete(d.SpanStatus, sp.Name)
+			continue
 		}
+		if t := d.Spans[sp.Name]; t != nil {
+			if problem := spanProblem(sp.Name, *t, s.items[i].Text); problem != "" {
+				return fmt.Errorf("proposal %s", problem)
+			}
+		}
+	}
+	if problems := s.schema.spanStatusProblems(Label{Type: p.Type, SpanStatus: d.SpanStatus}); len(problems) > 0 {
+		return fmt.Errorf("proposal %s", strings.Join(problems, "; "))
 	}
 	s.setDraft(i, d)
 	return nil

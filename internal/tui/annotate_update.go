@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -60,6 +61,14 @@ func (m annotModel) updateKey(k tea.KeyMsg) (annotModel, tea.Cmd) {
 	}
 }
 
+// tabDelta is the active-field step of a tab (+1) or shift+tab (-1) key.
+func tabDelta(key string) int {
+	if key == "shift+tab" {
+		return -1
+	}
+	return 1
+}
+
 // setStatus records a transient status message and schedules its expiry.
 func (m annotModel) setStatus(format string, args ...any) (annotModel, tea.Cmd) {
 	m.status = fmt.Sprintf(format, args...)
@@ -116,8 +125,24 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 	case "x":
 		return m.openSpan()
 	case "n":
-		m.sess.ClearTarget(i)
-		return m.setStatus("target: null")
+		name := m.active().Name
+		if err := m.sess.ClearSpan(i, name); err != nil {
+			return m.setError("%s: %v", name, err)
+		}
+		return m.setStatus("%s: null", name)
+	case "c":
+		if !m.spanUI() {
+			return m, nil
+		}
+		name := m.active().Name
+		status, err := m.sess.CycleSpanStatus(i, name)
+		if err != nil {
+			return m.setError("%v", err)
+		}
+		return m.setStatus("%s status: %s", name, status)
+	case "tab", "shift+tab":
+		m = m.cycleSpan(tabDelta(key))
+		return m, nil
 	case "esc":
 		if !m.sess.Dirty(i) {
 			return m, nil
@@ -240,14 +265,15 @@ func (m annotModel) undo() (annotModel, tea.Cmd) {
 	return m.setStatus("undo: %s %s", desc, m.sess.Item(i).ID)
 }
 
-// applyType sets the current draft's type, reporting a target it cleared.
+// applyType sets the current draft's type, reporting the span fields it cleared.
 func (m annotModel) applyType(name string) (annotModel, tea.Cmd) {
 	cleared, err := m.sess.SetType(m.sess.Cursor(), name)
 	if err != nil {
 		return m.setError("type: %v", err)
 	}
-	if cleared {
-		return m.setStatus("type %s · target cleared (%s requires a null target)", name, name)
+	if len(cleared) > 0 {
+		return m.setStatus("type %s · %s cleared (%s requires a null %s)", name,
+			strings.Join(cleared, ", "), name, strings.Join(cleared, ", "))
 	}
 	return m.setStatus("type %s", name)
 }
@@ -292,18 +318,20 @@ func (m annotModel) openFilter() annotModel {
 	return m
 }
 
-// openSpan enters span mode, refusing null-target types and empty texts.
+// openSpan enters span mode on the active field, refusing a field the draft type
+// requires to be null and empty texts.
 func (m annotModel) openSpan() (annotModel, tea.Cmd) {
 	i := m.sess.Cursor()
 	d := m.sess.Draft(i)
-	if d.Type != "" && m.sess.Schema().NullTarget(d.Type) {
-		return m.setError("type %s requires a null target", d.Type)
+	name := m.active().Name
+	if m.sess.Schema().NullSpan(name, d.Type) {
+		return m.setError("type %s requires a null %s", d.Type, name)
 	}
 	runes := []rune(m.sess.Item(i).Text)
 	if len(runes) == 0 {
 		return m.setError("record %s has no text to select", m.sess.Item(i).ID)
 	}
-	m.span = newSpanSel(runes, d.Target)
+	m.span = newSpanSel(runes, d.Spans[name])
 	m.mode = annotSpan
 	return m, nil
 }
@@ -319,16 +347,23 @@ func (m annotModel) updateSpan(key string) (annotModel, tea.Cmd) {
 		return m.openHelp(), nil
 	case "enter":
 		i := m.sess.Cursor()
+		name := m.active().Name
 		lo, hi := m.span.bounds()
-		if err := m.sess.SetTarget(i, lo, hi+1); err != nil {
-			return m.setError("target: %v", err)
+		if err := m.sess.SetSpan(i, name, lo, hi+1); err != nil {
+			return m.setError("%s: %v", name, err)
 		}
 		m.mode = annotMain
-		return m.setStatus("target %q [%d,%d)", string(m.span.runes[lo:hi+1]), lo, hi+1)
+		return m.setStatus("%s %q [%d,%d)", name, string(m.span.runes[lo:hi+1]), lo, hi+1)
 	case "n":
-		m.sess.ClearTarget(m.sess.Cursor())
+		name := m.active().Name
+		if err := m.sess.ClearSpan(m.sess.Cursor(), name); err != nil {
+			return m.setError("%s: %v", name, err)
+		}
 		m.mode = annotMain
-		return m.setStatus("target: null")
+		return m.setStatus("%s: null", name)
+	case "tab", "shift+tab":
+		m = m.cycleSpan(tabDelta(key))
+		return m, nil
 	case "h", "left":
 		m.span.move(-1)
 	case "l", "right":

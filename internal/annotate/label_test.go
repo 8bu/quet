@@ -116,6 +116,9 @@ func writeFile(t *testing.T, name, content string) string {
 	return path
 }
 
+// tgt returns the Spans of a label of the implicit schema (one span, target) holding t (nil = null).
+func tgt(t *Target) map[string]*Target { return map[string]*Target{"target": t} }
+
 // labelQueue is a small queue for label loading tests.
 var labelQueue = []Item{
 	{ID: "a", Text: "cho thg Nam mượn 2 củ"},
@@ -135,8 +138,8 @@ func TestLoadLabelsValid(t *testing.T) {
 		t.Fatalf("LoadLabels: %v", err)
 	}
 	want := map[string]Label{
-		"a": {ID: "a", Status: "complete", Type: new("lend"), Target: &Target{Text: "Nam", Start: 8, End: 11}},
-		"c": {ID: "c", Status: "uncertain", Note: "ambiguous"},
+		"a": {ID: "a", Status: "complete", Type: new("lend"), Spans: tgt(&Target{Text: "Nam", Start: 8, End: 11})},
+		"c": {ID: "c", Status: "uncertain", Spans: tgt(nil), Note: "ambiguous"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
@@ -195,11 +198,11 @@ func TestWriteLabelsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "labels.jsonl")
 	labels := map[string]Label{
-		"c": {ID: "c", Status: "uncertain", Note: "<ambiguous & odd>"},
-		"a": {ID: "a", Status: "complete", Type: new("lend"), Target: &Target{Text: "Nam", Start: 8, End: 11}},
-		"b": {ID: "b", Status: "complete", Type: new("transfer")},
+		"c": {ID: "c", Status: "uncertain", Spans: tgt(nil), Note: "<ambiguous & odd>"},
+		"a": {ID: "a", Status: "complete", Type: new("lend"), Spans: tgt(&Target{Text: "Nam", Start: 8, End: 11})},
+		"b": {ID: "b", Status: "complete", Type: new("transfer"), Spans: tgt(nil)},
 	}
-	if err := WriteLabels(path, labelQueue, labels); err != nil {
+	if err := WriteLabels(path, loadGidiSchema(t), labelQueue, labels); err != nil {
 		t.Fatalf("WriteLabels: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -230,8 +233,8 @@ func TestWriteLabelsNonASCIIUnescaped(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "labels.jsonl")
 	queue := []Item{{ID: "x", Text: "ăn với Nam ở Pizza 4P 300k"}}
 	labels := map[string]Label{"x": {ID: "x", Status: "complete", Type: new("expense"),
-		Target: &Target{Text: "Pizza 4P", Start: 13, End: 21}, Note: "với <Nam> & bạn"}}
-	if err := WriteLabels(path, queue, labels); err != nil {
+		Spans: tgt(&Target{Text: "Pizza 4P", Start: 13, End: 21}), Note: "với <Nam> & bạn"}}
+	if err := WriteLabels(path, loadGidiSchema(t), queue, labels); err != nil {
 		t.Fatalf("WriteLabels: %v", err)
 	}
 	data, _ := os.ReadFile(path)
@@ -243,7 +246,7 @@ func TestWriteLabelsNonASCIIUnescaped(t *testing.T) {
 
 func TestWriteLabelsRejectsStrayIDs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "labels.jsonl")
-	err := WriteLabels(path, labelQueue, map[string]Label{"zz": {ID: "zz", Status: "skipped"}})
+	err := WriteLabels(path, loadGidiSchema(t), labelQueue, map[string]Label{"zz": {ID: "zz", Status: "skipped"}})
 	if err == nil || !strings.Contains(err.Error(), `"zz"`) {
 		t.Fatalf("err = %v, want stray id error", err)
 	}

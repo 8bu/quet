@@ -2,7 +2,9 @@
 
 `quet annotate` labels a queue of text records one at a time against a schema you define: each
 record gets a **type**, an optional **target** (a span of its text), and an **annotation status**.
-It is separate from reviewing: it never reads or writes the `.quet.db` review sidecar, and its only
+A schema may also declare [several named span fields](#multiple-span-fields), each with its own
+null rules and optional status, for example a counterparty and an amount in one pass. It is
+separate from reviewing: it never reads or writes the `.quet.db` review sidecar, and its only
 output is a labels JSONL file that is both the saved progress and the export.
 
 ```sh
@@ -24,7 +26,7 @@ quet annotate <queue.jsonl> --schema <schema.yaml> (--out|--labels) <labels.json
 
 | Flag | Meaning |
 | --- | --- |
-| `--schema <path>` | YAML schema: types, statuses and null-target types (required) |
+| `--schema <path>` | YAML schema: types, statuses, null-target types or [spans](#multiple-span-fields) (required) |
 | `--out <path>` | Labels JSONL for this queue, rewritten after every mark; reopening it resumes |
 | `--labels <path>` | Existing canonical labels JSONL to [re-check a subset](#re-check-subset) of |
 | `--proposals <path>` | Optional advisory [proposals](#proposals) JSONL; read-only, works with `--out` or `--labels` |
@@ -88,6 +90,125 @@ Three keys are bound to fixed status names: `enter` marks `complete`, `u` marks 
 marks `skipped`. The schema may declare other statuses too (they are counted but have no key); a key
 whose status the schema does not declare shows an error instead of marking anything.
 
+## Multiple span fields
+
+A schema may declare several named span fields, so one pass labels the type and every span of a
+record (for example a counterparty and an amount) instead of one `target`. Nothing changes without
+`spans:`: a schema that has none, and its labels and proposals files, behave exactly as before, with
+one implicit span called `target` governed by `null_target_types`, the same messages, bytes and
+screen. The rest of this page describes that case; this section adds what `spans:` changes.
+
+### Schema
+
+```yaml
+version: expense-v1
+types: {expense: Money paid out, income: Money received, transfer: Between own accounts}
+statuses: {complete: Confident, uncertain: Unsure, skipped: Not a money note}
+null_label_statuses: [skipped]
+
+spans:                              # optional; YAML order = tab order and label key order
+  target:
+    description: Counterparty. Minimal span as typed.
+    null_for_types: [transfer]      # this span must be null for these types
+  value:
+    description: Monetary amount. Exact substring, no normalization.
+    statuses: [complete, uncertain] # optional per-span status; the first is the default
+```
+
+A complete example is [`schema-multispan.yaml`](../examples/annotation/schema-multispan.yaml) with
+[`queue-multispan.jsonl`](../examples/annotation/queue-multispan.jsonl).
+
+- `spans` is either a mapping of span name → options, or a plain list of names
+  (`spans: [target, value]`, no options). A mapping value may be a description string, `null`, or a
+  mapping with the optional keys `description` (string), `null_for_types` (declared types, no
+  duplicates) and `statuses` (declared statuses, no duplicates; `[]` means none). Order is kept.
+- `null_for_types` replaces `null_target_types` for that field: the span must be `null` when the
+  record's type is listed, whatever the status.
+- `statuses` gives the span its own status, separate from the record's `annotation_status`, for
+  example to say that an amount is uncertain while the record is `complete`. A span without
+  `statuses` has no span status.
+- Span names must match `^[A-Za-z_][A-Za-z0-9_]*$`, be unique, and not be one of the reserved label
+  keys `id`, `annotation_status`, `type`, `note` and `span_status`.
+- `spans: null` counts as absent (the implicit `target` applies).
+- Schema errors cite the line number: `spans` together with `null_target_types` (`spans: cannot be
+  combined with null_target_types; use null_for_types per span`), an empty `spans` mapping or list,
+  a duplicate, badly formed or reserved span name, an unknown key inside a span mapping, a
+  `null_for_types` entry that is not a declared type, and a `statuses` entry that is not a declared
+  status.
+- `null_label_statuses` nulls the type and every span, and drops all span statuses.
+
+### Labels
+
+Every declared span name is a top-level key, always present, either `{"text","start","end"}` (same
+[offsets](#offsets) as `target`) or `null`. Keys are written in this order: `id`,
+`annotation_status`, `type`, each span in schema order, `span_status` (only when it has members),
+`note` (only when non-empty).
+
+```json
+{"id":"ms-001","annotation_status":"complete","type":"expense","target":{"text":"Vinamilk","start":10,"end":18},"value":{"text":"500k","start":23,"end":27},"span_status":{"value":"complete"}}
+{"id":"ms-002","annotation_status":"uncertain","type":"transfer","target":null,"value":{"text":"2tr","start":13,"end":16},"span_status":{"value":"uncertain"}}
+{"id":"ms-005","annotation_status":"skipped","type":null,"target":null,"value":null}
+```
+
+- `span_status` is an object keyed by span name, with string values, and covers only spans that
+  declare `statuses`. It is not an allowed key at all in a schema where no span declares statuses.
+- Marking fills in the span status for every span that declares `statuses` and is not null for the
+  record's type: the status you chose with `c`, otherwise the span's **first listed status** (the
+  default). A span keeps its status even when the span itself is `null`: it says how sure you are
+  that there is no value. Spans that are null for the type never get one.
+- A status in `null_label_statuses` saves `"type":null`, every span `null` and no `span_status`.
+- Choosing a type that is null-for-a-span clears that span (and its draft status) in the draft.
+- Loading is strict as before: allowed keys are `id`, `annotation_status`, `type`, `note`, every span
+  name and (only when a span declares statuses) `span_status`; `id`, `annotation_status`, `type` and
+  every span name are required. Span errors are prefixed with the span name (`value.text: ...`,
+  `value: expected an object or null`); for the implicit `target` they are exactly the old messages.
+
+### Validation
+
+The checks under [Validation](#validation) apply to every span, each in schema order, joined with
+`; ` after the status and type problems:
+
+- `<name>: ...` for a span that is outside the text, does not match the text, is empty or has
+  leading or trailing whitespace (the same wording as for `target`, with the name substituted);
+- `<name>: must be null for type "<type>"` for a span in its `null_for_types`;
+- `span_status.<name>: "<s>" is not one of [<span statuses>]`;
+- `span_status.<name>: span declares no statuses`, `span_status.<name>: not a declared span`, and
+  `span_status.<name>: must be absent for type "<type>"`.
+
+A missing `span_status` entry is not an error on load (the file is read leniently); the default
+applies the next time the record is marked.
+
+### Proposals
+
+`--proposals` takes the same per-field keys: each declared span name is an optional top-level key
+(`{"text","start","end"}` or `null`; absent means null) and an optional `span_status` object with
+string values. Other members stay ignored, so reading proposals needs the schema. As with
+`target`, values are checked against the schema and the record's text when displayed and accepted:
+an invalid span, an undeclared span status or a span set for a null-for-type type is marked
+`⚠ invalid`, and `p` refuses it. `p` and `P` carry type, every span and the span statuses; a null
+span is dropped for a type that must have it null.
+
+```json
+{"id":"ms-001","annotation_status":"complete","type":"expense","target":{"text":"Vinamilk","start":10,"end":18},"value":{"text":"500k","start":23,"end":27},"span_status":{"value":"uncertain"},"confidence":0.8}
+```
+
+### On screen and keys
+
+With more than one span, the record panel shows each field as `<Label>: "text" [a,b)` or
+`<Label>: null`, plus ` · <status>` for a field with statuses (`(default)` while you have not set
+one). Every non-null span is highlighted in the text in its own colour, the active field on top
+where they overlap, and the active field is marked in the list. The proposal block lists each field
+the same way. A schema with a single span (every schema without `spans:`) is drawn exactly as
+before: `Target: ...`, the same footer and help.
+
+- `tab` / `shift+tab` cycle the active field (with one field they do nothing and are not listed).
+- `x` selects a span for the active field and `n` nulls it; in span mode `enter` writes to the
+  active field, `n` nulls it, `tab` / `shift+tab` switch the active field keeping the selection, and
+  `esc` cancels.
+- `c` cycles the active field's span status through its `statuses` list, wrapping; a field without
+  `statuses` answers `span <name> declares no statuses`.
+- The active field is kept when you move to another record.
+
 ## Labels
 
 One JSON object per annotated record, in queue order (with `--out`; see
@@ -118,6 +239,9 @@ Every label is checked against the schema when it is marked and when the labels 
   `0 ≤ start < end ≤` the text length, `text` is exactly the text between them, it is non-empty, and
   it neither starts nor ends with whitespace.
 - `target` must be `null` when the type is in `null_target_types`, whatever the status.
+
+With [`spans:`](#multiple-span-fields), `target` is replaced by one field per declared span, each
+checked the same way and against its own `null_for_types`, plus the `span_status` rules.
 
 `null_label_statuses` is applied when marking, not checked on load: a labels file that already has,
 say, a `skipped` label with a type still opens, shows that type, and is cleaned up to
@@ -174,7 +298,8 @@ quet annotate recheck-01.jsonl --schema schema.yaml --labels labels.jsonl
 - Every label is validated when the file is opened. Queue ids are checked against their text as
   usual; other ids have no text to compare, so they get the schema checks (declared status and type,
   a type when `complete`, no target on a null-target type) and a structural target check (`start ≥
-  0`, `end > start`, and `text` exactly `end - start` code points long). Invalid JSON, unknown keys
+  0`, `end > start`, and `text` exactly `end - start` code points long); with
+  [`spans:`](#multiple-span-fields) every span gets the same checks and the `span_status` rules. Invalid JSON, unknown keys
   and duplicate ids anywhere in the file are errors too.
 - Marking a queue record replaces its line in place; a queue record that had no label gets a new
   line appended at the end. Undo restores the previous line, or removes the appended one. Unchanged
@@ -221,7 +346,8 @@ JSONL, one object per line; blank lines are skipped.
 | `id` | required, non-empty string: the queue record it is about |
 | `annotation_status` | required string |
 | `type` | optional string or `null` |
-| `target` | optional: `null` or `{"text","start","end"}`, decoded like a [label's target](#labels) |
+| `target` | optional (the implicit span of a schema without `spans:`): `null` or `{"text","start","end"}`, decoded like a [label's target](#labels) |
+| span names, `span_status` | with [`spans:`](#multiple-span-fields): one optional member per declared span (same shape as `target`), and an optional `span_status` object of strings |
 | `note` | optional string |
 | `confidence` | optional number from 0 to 1, shown to you and never written |
 | `reason` | optional string, shown to you and never written |
@@ -233,7 +359,7 @@ Any other member is ignored, so another tool's extra fields do no harm.
 The file is read when `quet annotate` starts, after the queue and labels, and before the terminal
 check. A problem refuses to open and is reported as `quet: proposals <path>:<line>: <error>` with
 exit status 1: invalid JSON, a missing or ill-typed `id` or `annotation_status`, a wrongly typed
-optional member, a bad `target` shape, a `confidence` outside 0 to 1, or a duplicate `id` (the error
+optional member, a bad `target` (or other [span](#multiple-span-fields)) shape, a `confidence` outside 0 to 1, or a duplicate `id` (the error
 names the first line). The file must exist and must not be the queue file or the labels file.
 
 Proposals are **not** checked against the schema when loaded. Ids that are not in the queue are not
@@ -311,8 +437,10 @@ other navigation keys ignore it.
 | `s` | mark `skipped` |
 | `t` | open the type picker |
 | `1`–`9` | set the Nth type (schema order) |
-| `x` | select the target span ([span mode](#span-mode)) |
-| `n` | null target |
+| `x` | select the target span ([span mode](#span-mode)); with `spans:`, the active field's |
+| `n` | null target; with `spans:`, null the active field |
+| `tab` / `shift+tab` | next / previous active span field (only with more than one `spans:` field) |
+| `c` | cycle the active field's span status (only with `spans:` where a field declares `statuses`) |
 | `esc` | discard the unsaved draft |
 | `a`, `A`, `h`, `H`, `←` | previous record in queue order, labelled or not |
 | `d`, `D`, `l`, `L`, `→` | next record in queue order, labelled or not |
@@ -358,7 +486,8 @@ Opened with `t`; the highlighted type's schema description is shown.
 
 ### Span mode
 
-Opened with `x`; refused with a message when the draft type is a null-target type. The selection
+Opened with `x`; refused with a message when the draft type is a null-target type (with
+[`spans:`](#multiple-span-fields): null for the active field). The selection
 runs from an anchor to a head (inclusive, always at least one character) and starts on the existing
 target, else on the first word. A word is a run of letters, digits and combining marks.
 
@@ -369,8 +498,9 @@ target, else on the first word. A word is a run of letters, digits and combining
 | `H` / `L`, `shift+←` / `shift+→` | move the head one character left / right, keeping the anchor (grows or shrinks the selection) |
 | `W` / `B` | extend to the end of the next word / the start of the previous word; from a single space or punctuation character, select the next / previous word instead |
 | `0`, `home` / `$`, `end` | first / last character |
-| `enter` | accept the selection as the target |
-| `n` | null target, and leave span mode |
+| `enter` | accept the selection as the target (with [`spans:`](#multiple-span-fields): write it to the active field) |
+| `n` | null target, and leave span mode (with `spans:`: null the active field) |
+| `tab` / `shift+tab` | with `spans:` and more than one field: switch the active field, keeping the selection |
 | `esc` | cancel |
 | `?` | help |
 

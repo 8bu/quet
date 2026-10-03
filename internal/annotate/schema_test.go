@@ -39,11 +39,14 @@ func TestLoadSchemaGidiFixture(t *testing.T) {
 	if !strings.HasPrefix(s.Statuses[1].Description, "The text does not establish") {
 		t.Errorf("uncertain description = %q", s.Statuses[1].Description)
 	}
-	if !reflect.DeepEqual(s.NullTargetTypes, []string{"transfer"}) {
-		t.Errorf("NullTargetTypes = %v", s.NullTargetTypes)
+	if !reflect.DeepEqual(s.Spans, []SpanDef{{Name: "target", NullForTypes: []string{"transfer"}}}) {
+		t.Errorf("Spans = %+v, want the implicit target span null for transfer", s.Spans)
 	}
-	if !s.NullTarget("transfer") || s.NullTarget("lend") {
-		t.Error("NullTarget: want only transfer")
+	if !s.NullSpan("target", "transfer") || s.NullSpan("target", "lend") || s.NullSpan("target", "") || s.NullSpan("value", "transfer") {
+		t.Error("NullSpan: want only target/transfer")
+	}
+	if s.HasSpanStatuses() {
+		t.Error("HasSpanStatuses: the implicit schema declares none")
 	}
 	if !s.HasType("refund") || s.HasType("other") || !s.HasStatus("skipped") || s.HasStatus("approved") {
 		t.Error("HasType/HasStatus mismatch")
@@ -58,6 +61,7 @@ func TestParseSchemaSequenceForm(t *testing.T) {
 	want := &Schema{
 		Types:    []TypeDef{{Name: "b"}, {Name: "a"}, {Name: "c"}},
 		Statuses: []StatusDef{{Name: "complete"}, {Name: "later"}},
+		Spans:    []SpanDef{{Name: "target"}},
 	}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("got %+v, want %+v", s, want)
@@ -107,8 +111,8 @@ func TestParseSchemaIgnoresOtherKeysAndDescriptionsMayBeNull(t *testing.T) {
 	if !reflect.DeepEqual(s.Types, []TypeDef{{Name: "a"}, {Name: "b", Description: "B"}}) {
 		t.Errorf("Types = %+v", s.Types)
 	}
-	if len(s.NullTargetTypes) != 0 {
-		t.Errorf("NullTargetTypes = %v", s.NullTargetTypes)
+	if len(s.Spans) != 1 || len(s.Spans[0].NullForTypes) != 0 {
+		t.Errorf("Spans = %+v, want only target with no null types", s.Spans)
 	}
 }
 
@@ -121,26 +125,26 @@ func TestSchemaValidate(t *testing.T) {
 		label Label
 		want  []string // substrings of the error; nil = valid
 	}{
-		{"complete lend with target", Label{Status: "complete", Type: new("lend"), Target: nam}, nil},
+		{"complete lend with target", Label{Status: "complete", Type: new("lend"), Spans: tgt(nam)}, nil},
 		{"complete with null target", Label{Status: "complete", Type: new("expense")}, nil},
 		{"complete transfer null target", Label{Status: "complete", Type: new("transfer")}, nil},
 		{"uncertain all null", Label{Status: "uncertain"}, nil},
 		{"skipped all null", Label{Status: "skipped"}, nil},
-		{"uncertain carries valid values", Label{Status: "uncertain", Type: new("lend"), Target: nam}, nil},
+		{"uncertain carries valid values", Label{Status: "uncertain", Type: new("lend"), Spans: tgt(nam)}, nil},
 		{"complete without type", Label{Status: "complete"}, []string{`type: required when annotation_status is "complete"`}},
 		{"unknown type", Label{Status: "complete", Type: new("other")}, []string{`type: "other" is not one of [expense, income`}},
 		{"empty type string", Label{Status: "uncertain", Type: new("")}, []string{`type: "" is not one of`}},
 		{"unknown status", Label{Status: "approved", Type: new("lend")}, []string{`annotation_status: "approved" is not one of [complete, uncertain, skipped]`}},
 		{"uncertain carries unknown type", Label{Status: "uncertain", Type: new("gift")}, []string{`type: "gift"`}},
-		{"skipped carries bad span", Label{Status: "skipped", Target: &Target{Text: "Nam", Start: 3, End: 6}}, []string{`target: text[3:6] is " Na", not "Nam"`}},
-		{"transfer with target", Label{Status: "complete", Type: new("transfer"), Target: nam}, []string{`target: must be null for type "transfer"`}},
-		{"uncertain transfer with target", Label{Status: "uncertain", Type: new("transfer"), Target: nam}, []string{`must be null for type "transfer"`}},
-		{"every problem listed", Label{Status: "nope", Type: new("gift"), Target: &Target{Text: "", Start: 0, End: 1}},
+		{"skipped carries bad span", Label{Status: "skipped", Spans: tgt(&Target{Text: "Nam", Start: 3, End: 6})}, []string{`target: text[3:6] is " Na", not "Nam"`}},
+		{"transfer with target", Label{Status: "complete", Type: new("transfer"), Spans: tgt(nam)}, []string{`target: must be null for type "transfer"`}},
+		{"uncertain transfer with target", Label{Status: "uncertain", Type: new("transfer"), Spans: tgt(nam)}, []string{`must be null for type "transfer"`}},
+		{"every problem listed", Label{Status: "nope", Type: new("gift"), Spans: tgt(&Target{Text: "", Start: 0, End: 1})},
 			[]string{"annotation_status:", "; type:", "; target.text: expected a non-empty string"}},
-		{"padded target text", Label{Status: "complete", Type: new("lend"), Target: &Target{Text: " Nam", Start: 3, End: 7}}, []string{"leading or trailing whitespace"}},
-		{"target beyond text", Label{Status: "complete", Type: new("lend"), Target: &Target{Text: "Nam", Start: 15, End: 18}}, []string{"beyond the text length 16"}},
-		{"target start >= end", Label{Status: "complete", Type: new("lend"), Target: &Target{Text: "Nam", Start: 7, End: 4}}, []string{"is empty"}},
-		{"negative start", Label{Status: "complete", Type: new("lend"), Target: &Target{Text: "Nam", Start: -1, End: 2}}, []string{"negative"}},
+		{"padded target text", Label{Status: "complete", Type: new("lend"), Spans: tgt(&Target{Text: " Nam", Start: 3, End: 7})}, []string{"leading or trailing whitespace"}},
+		{"target beyond text", Label{Status: "complete", Type: new("lend"), Spans: tgt(&Target{Text: "Nam", Start: 15, End: 18})}, []string{"beyond the text length 16"}},
+		{"target start >= end", Label{Status: "complete", Type: new("lend"), Spans: tgt(&Target{Text: "Nam", Start: 7, End: 4})}, []string{"is empty"}},
+		{"negative start", Label{Status: "complete", Type: new("lend"), Spans: tgt(&Target{Text: "Nam", Start: -1, End: 2})}, []string{"negative"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
