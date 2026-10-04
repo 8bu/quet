@@ -11,7 +11,7 @@ import (
 
 // command is a parsed command line: what to do, with which corpus, and the flags for it.
 type command struct {
-	kind   string   // "review" (default), "stats", "export", "init", "update", "annotate", or a scripting command: "list", "show", "set", "flag", "suggest", "edit", "undo"
+	kind   string   // "review" (default), "stats", "export", "init", "update", "annotate", "web", or a scripting command: "list", "show", "set", "flag", "suggest", "edit", "undo"
 	corpus string   // the corpus, or the queue file for "annotate"
 	ids    []string // record IDs after the corpus (scripting commands)
 
@@ -70,6 +70,22 @@ type command struct {
 	hasLabels     bool
 	proposalsPath string
 	hasProposals  bool
+
+	// web flags (`quet web ...`); the queue file of `web push` is webArgs[0]
+	webAction   string   // "remote", "login", "push", "list" or "pull"
+	webSub      string   // the `web remote` subcommand: "add", "list", "remove" or "default"
+	webArgs     []string // positional arguments after the web subcommand
+	project     string
+	hasProject  bool
+	projectName string
+	hasName     bool
+	remote      string
+	hasRemote   bool
+	user        string
+	hasUser     bool
+	all         bool
+	outDir      string
+	hasOutDir   bool
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -88,7 +104,8 @@ func usagef(format string, args ...any) error {
 // "annotate" followed by a queue file labels it against --schema into --out, or re-checks
 // it as a subset of the existing canonical labels file given with --labels.
 // "init" (no corpus) writes starter config files, "update" (no corpus) updates the binary
-// and "help" prints the help. With no corpus argument the review TUI opens on the file browser.
+// and "help" prints the help. "web" followed by a subcommand talks to a quet-web server
+// (see parseWeb). With no corpus argument the review TUI opens on the file browser.
 func parseArgs(args []string) (command, error) {
 	cmd := command{kind: "review", status: "approved"}
 
@@ -159,6 +176,9 @@ func parseArgs(args []string) (command, error) {
 		cmd.kind = positional[0]
 		cmd.corpus = positional[1]
 		rest = positional[2:]
+	case positional[0] == "web":
+		cmd.kind = "web"
+		return cmd, cmd.parseWeb(positional[1:])
 	case positional[0] == "annotate":
 		if len(positional) < 2 {
 			return cmd, usagef("missing queue file")
@@ -228,7 +248,8 @@ func splitFlag(arg string) (name, value string, hasValue bool) {
 func valueFlag(name string) bool {
 	switch name {
 	case "--filter", "--flags-file", "--config", "--status", "-o", "--output", "--format",
-		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out", "--labels", "--proposals":
+		"--limit", "--add", "--remove", "--text", "--text-file", "--schema", "--out", "--labels", "--proposals",
+		"--project", "--name", "--remote", "--user", "--out-dir":
 		return true
 	}
 	return false
@@ -271,6 +292,16 @@ func (c *command) setValueFlag(name, value string) error {
 		c.text, c.hasText = value, true
 	case "--text-file":
 		c.textFile, c.hasTextFile = value, true
+	case "--project":
+		c.project, c.hasProject = value, true
+	case "--name":
+		c.projectName, c.hasName = value, true
+	case "--remote":
+		c.remote, c.hasRemote = value, true
+	case "--user":
+		c.user, c.hasUser = value, true
+	case "--out-dir":
+		c.outDir, c.hasOutDir = value, true
 	default:
 		return usagef("unknown flag %s", name)
 	}
@@ -309,6 +340,8 @@ func (c *command) setBoolFlag(name string) error {
 		c.json = true
 	case "--revert":
 		c.revert = true
+	case "--all":
+		c.all = true
 	default:
 		return usagef("unknown flag %s", name)
 	}
@@ -320,7 +353,12 @@ func (c *command) validate() error {
 	if c.check && c.kind != "update" {
 		return usagef("--check is only valid with `quet update`")
 	}
-	if c.kind != "annotate" {
+	if c.kind != "web" {
+		if err := c.rejectWebFlags(); err != nil {
+			return err
+		}
+	}
+	if c.kind != "annotate" && c.kind != "web" {
 		if c.hasSchema {
 			return usagef("--schema is only valid with `quet annotate`")
 		}
@@ -339,6 +377,8 @@ func (c *command) validate() error {
 		return c.validateOnly("--global", "--force")
 	case "update":
 		return c.validateOnly("--check")
+	case "web":
+		return c.validateWeb()
 	case "annotate":
 		return c.validateAnnotate()
 	case "list", "show", "set", "flag", "suggest", "edit", "undo":
@@ -522,5 +562,170 @@ func (c *command) givenFlags() []string {
 	add(c.hasOut, "--out")
 	add(c.hasLabels, "--labels")
 	add(c.hasProposals, "--proposals")
+	add(c.hasProject, "--project")
+	add(c.hasName, "--name")
+	add(c.hasRemote, "--remote")
+	add(c.hasUser, "--user")
+	add(c.all, "--all")
+	add(c.hasOutDir, "--out-dir")
 	return flags
+}
+
+// webOnlyFlags are the flags only `quet web` takes.
+var webOnlyFlags = []string{"--project", "--name", "--remote", "--user", "--all", "--out-dir"}
+
+// rejectWebFlags rejects the web-only flags given to a command other than `quet web`.
+func (c *command) rejectWebFlags() error {
+	for _, flag := range c.givenFlags() {
+		if slices.Contains(webOnlyFlags, flag) {
+			return usagef("%s is only valid with `quet web`", flag)
+		}
+	}
+	return nil
+}
+
+// parseWeb parses what follows `quet web`: remote add|list|remove|default, login, push, list or
+// pull, with the positional arguments each takes (the flags were parsed already), then validates
+// the whole command.
+func (c *command) parseWeb(args []string) error {
+	if len(args) == 0 {
+		return usagef("`quet web` needs a subcommand: remote, login, push, list or pull")
+	}
+	c.webAction, args = args[0], args[1:]
+	switch c.webAction {
+	case "remote":
+		if len(args) == 0 {
+			return usagef("`quet web remote` needs a subcommand: add, list, remove or default")
+		}
+		c.webSub, args = args[0], args[1:]
+		if !slices.Contains([]string{"add", "list", "remove", "default"}, c.webSub) {
+			return usagef("unknown subcommand `quet web remote %s` (want add, list, remove or default)", c.webSub)
+		}
+	case "login", "push", "list", "pull":
+	default:
+		return usagef("unknown subcommand `quet web %s` (want remote, login, push, list or pull)", c.webAction)
+	}
+	if len(args) > 0 {
+		c.webArgs = args
+	}
+	return c.validate()
+}
+
+// webLabel names the web subcommand for error messages, such as "quet web remote add".
+func (c *command) webLabel() string {
+	if c.webSub != "" {
+		return "quet web " + c.webAction + " " + c.webSub
+	}
+	return "quet web " + c.webAction
+}
+
+// validateWeb checks the arguments and flags of a `quet web` subcommand.
+func (c *command) validateWeb() error {
+	label := c.webLabel()
+	var allowed []string
+	switch c.webAction {
+	case "remote":
+		want := map[string]int{"add": 2, "list": 0, "remove": 1, "default": 1}[c.webSub]
+		switch {
+		case c.webSub == "add" && len(c.webArgs) < 2:
+			return usagef("`%s` needs a name and a URL: quet web remote add <name> <url>", label)
+		case c.webSub != "add" && c.webSub != "list" && len(c.webArgs) == 0:
+			return usagef("`%s` needs a remote name", label)
+		case len(c.webArgs) > want:
+			return usagef("unexpected argument %q", c.webArgs[want])
+		}
+	case "login":
+		if len(c.webArgs) > 1 {
+			return usagef("unexpected argument %q", c.webArgs[1])
+		}
+	case "push":
+		switch {
+		case len(c.webArgs) == 0:
+			return usagef("missing queue file")
+		case len(c.webArgs) > 1:
+			return usagef("unexpected argument %q", c.webArgs[1])
+		}
+		allowed = []string{"--schema", "--proposals", "--project", "--name", "--remote"}
+	case "list":
+		if len(c.webArgs) > 0 {
+			return usagef("unexpected argument %q", c.webArgs[0])
+		}
+		allowed = []string{"--remote", "--json"}
+	case "pull":
+		if len(c.webArgs) > 0 {
+			return usagef("unexpected argument %q", c.webArgs[0])
+		}
+		allowed = []string{"--project", "--user", "--all", "--remote", "--out", "--labels", "--out-dir", "--force"}
+	}
+	for _, flag := range c.givenFlags() {
+		if !slices.Contains(allowed, flag) {
+			return usagef("%s is not valid with `%s`", flag, label)
+		}
+	}
+	for _, v := range []struct {
+		given bool
+		value string
+		flag  string
+	}{
+		{c.hasProject, c.project, "--project <slug>"},
+		{c.hasName, c.projectName, "--name <name>"},
+		{c.hasRemote, c.remote, "--remote <name>"},
+		{c.hasUser, c.user, "--user <name>"},
+		{c.hasSchema, c.schemaPath, "--schema <schema.yaml>"},
+		{c.hasProposals, c.proposalsPath, "--proposals <proposals.jsonl>"},
+		{c.hasOut, c.outPath, "--out <labels.jsonl>"},
+		{c.hasLabels, c.labelsPath, "--labels <labels.jsonl>"},
+		{c.hasOutDir, c.outDir, "--out-dir <dir>"},
+	} {
+		if v.given && v.value == "" {
+			return usagef("`%s` needs a value for %s", label, v.flag)
+		}
+	}
+	switch c.webAction {
+	case "push":
+		if !c.hasSchema {
+			return usagef("`quet web push` needs --schema <schema.yaml>")
+		}
+		if !c.hasProject {
+			return usagef("`quet web push` needs --project <slug>")
+		}
+	case "pull":
+		return c.validateWebPull()
+	}
+	return nil
+}
+
+// validateWebPull checks the flag combinations of `quet web pull`: one of --user and --all, and the
+// output that goes with it. --project may be left out only with --labels, whose sidecar can supply it.
+func (c *command) validateWebPull() error {
+	switch {
+	case c.hasUser && c.all:
+		return usagef("--user and --all are mutually exclusive")
+	case !c.hasUser && !c.all:
+		return usagef("`quet web pull` needs --user <name> or --all")
+	}
+	if c.all {
+		if c.hasOut || c.hasLabels {
+			return usagef("--all writes one file per collaborator: use --out-dir <dir>, not --out or --labels")
+		}
+		if !c.hasOutDir {
+			return usagef("`quet web pull --all` needs --out-dir <dir>")
+		}
+	} else {
+		switch {
+		case c.hasOutDir:
+			return usagef("--out-dir is only valid with --all")
+		case c.hasOut && c.hasLabels:
+			return usagef("--out and --labels are mutually exclusive")
+		case !c.hasOut && !c.hasLabels:
+			return usagef("`quet web pull --user` needs --out <labels.jsonl> or --labels <labels.jsonl>")
+		}
+	}
+	if c.force && c.hasLabels {
+		return usagef("--force is not valid with --labels (it merges into the existing file)")
+	}
+	if !c.hasProject && !c.hasLabels {
+		return usagef("`quet web pull` needs --project <slug>")
+	}
+	return nil
 }

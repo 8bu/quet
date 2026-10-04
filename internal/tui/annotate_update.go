@@ -22,6 +22,12 @@ func (m annotModel) update(msg tea.Msg) (annotModel, tea.Cmd) {
 			m.status, m.statusErr = "", false
 		}
 		return m, nil
+	case webProjectsMsg:
+		return m.onProjects(msg)
+	case webPublishMsg:
+		return m.onPublish(msg)
+	case webPullMsg:
+		return m.onPull(msg)
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
@@ -42,6 +48,8 @@ func (m annotModel) updateKey(k tea.KeyMsg) (annotModel, tea.Cmd) {
 			m.types.cursor = 0
 		case annotGoto:
 			m.gotoQuery = append(m.gotoQuery, k.Runes...)
+		case annotWebForm, annotWebProjects:
+			m = m.webPaste(k.Runes)
 		}
 		return m, nil
 	}
@@ -56,6 +64,20 @@ func (m annotModel) updateKey(k tea.KeyMsg) (annotModel, tea.Cmd) {
 		return m.updateHelp(k.String())
 	case annotGoto:
 		return m.updateGoto(k)
+	case annotWebMenu:
+		return m.updateWebMenu(k.String())
+	case annotWebRemotes:
+		return m.updateWebRemotes(k.String())
+	case annotWebForm:
+		return m.updateWebForm(k)
+	case annotWebProjects:
+		return m.updateWebProjects(k)
+	case annotWebConfirm:
+		return m.updateWebConfirm(k.String())
+	case annotWebBusy:
+		return m.updateWebBusy(k.String())
+	case annotCompare:
+		return m.updateCompare(k.String())
 	default:
 		return m.updateMain(k.String())
 	}
@@ -100,6 +122,8 @@ func (m annotModel) updateMain(key string) (annotModel, tea.Cmd) {
 		return m.openHelp(), nil
 	case "f":
 		return m.openFilter(), nil
+	case "w":
+		return m.openWeb()
 	}
 	if m.sess.Len() == 0 {
 		return m, nil

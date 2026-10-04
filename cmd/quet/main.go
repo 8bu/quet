@@ -51,6 +51,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runReview(cmd, stdout, stderr)
 	case "annotate":
 		return runAnnotate(cmd, stdout, stderr)
+	case "web":
+		return runWeb(cmd, stdout, stderr)
 	default:
 		// --json output is for machines: skip the update notice so nothing but the
 		// result is printed.

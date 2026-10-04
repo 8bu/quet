@@ -56,8 +56,8 @@ func TestLoadProposals(t *testing.T) {
 	if err != nil || len(ignored) != 0 {
 		t.Fatalf("LoadProposals = %v, %v", ignored, err)
 	}
-	if !s.HasProposals() || s.ProposalsPath() != path || s.ProposalCount() != 2 || len(s.IgnoredProposals()) != 0 {
-		t.Errorf("HasProposals=%v path=%q count=%d ignored=%v", s.HasProposals(), s.ProposalsPath(), s.ProposalCount(), s.IgnoredProposals())
+	if !s.HasProposals() || s.ProposalsSource() != path || s.ProposalCount() != 2 || len(s.IgnoredProposals()) != 0 {
+		t.Errorf("HasProposals=%v path=%q count=%d ignored=%v", s.HasProposals(), s.ProposalsSource(), s.ProposalCount(), s.IgnoredProposals())
 	}
 	p, ok := s.Proposal(idxLend)
 	if !ok {
@@ -140,7 +140,7 @@ func TestLoadProposalsErrors(t *testing.T) {
 			if _, err := s.LoadProposals(path); err == nil || !strings.HasPrefix(err.Error(), "proposals "+path) || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("LoadProposals error = %v, want prefix %q containing %q", err, "proposals "+path, tt.want)
 			}
-			if s.HasProposals() || s.ProposalCount() != 0 || s.ProposalsPath() != "" {
+			if s.HasProposals() || s.ProposalCount() != 0 || s.ProposalsSource() != "" {
 				t.Error("a failed load left proposals in the session")
 			}
 		})
@@ -490,7 +490,7 @@ func TestProposalFilters(t *testing.T) {
 func TestNoProposals(t *testing.T) {
 	f := newFixture(t, "")
 	s := f.open(t)
-	if s.HasProposals() || s.ProposalsPath() != "" || s.ProposalCount() != 0 || s.IgnoredProposals() != nil {
+	if s.HasProposals() || s.ProposalsSource() != "" || s.ProposalCount() != 0 || s.IgnoredProposals() != nil {
 		t.Error("proposal accessors report data without LoadProposals")
 	}
 	if _, ok := s.Proposal(idxLend); ok {

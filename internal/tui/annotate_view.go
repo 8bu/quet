@@ -93,6 +93,10 @@ func (m annotModel) body(w, h int) string {
 	case annotGoto:
 		ow := min(w, 48)
 		return overlayBox("Go to", w, h, ow, m.gotoContent(ow-2), -1)
+	case annotWebMenu, annotWebRemotes, annotWebForm, annotWebProjects, annotWebConfirm, annotWebBusy:
+		return m.webModeBody(w, h)
+	case annotCompare:
+		return m.compareBody(w, h)
 	}
 	header := m.headerRows()
 	headH := len(header) + 2
@@ -705,6 +709,7 @@ func annotHelpGroups(schema *annotate.Schema, proposals bool) []helpGroup {
 			{"saving", "p/enter/u/s only"},
 		}})
 	}
+	groups = slices.Insert(groups, len(groups)-1, webHelpGroups()...)
 	return groups
 }
 
@@ -722,11 +727,13 @@ func (m annotModel) footerItems() []string {
 		return []string{"j/k scroll", "esc close"}
 	case annotGoto:
 		return []string{"type position or id", "enter go", "esc cancel"}
+	case annotWebMenu, annotWebRemotes, annotWebForm, annotWebProjects, annotWebConfirm, annotWebBusy, annotCompare:
+		return m.webFooterItems()
 	default:
 		items := []string{"t type"}
 		items = append(items, m.spanFooterItems()...)
 		items = append(items, "enter complete", "u uncertain", "s skip", "a/d prev/next",
-			"[/] prev/next "+m.sess.Filter().String(), "z undo", ": go to", "f filter", "? help", "q quit")
+			"[/] prev/next "+m.sess.Filter().String(), "z undo", ": go to", "f filter", "w web", "? help", "q quit")
 		if m.sess.Len() > 0 {
 			if _, ok := m.sess.Proposal(m.sess.Cursor()); ok {
 				items = append([]string{"p accept proposal", "P edit proposal"}, items...)

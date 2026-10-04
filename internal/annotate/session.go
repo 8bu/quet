@@ -87,20 +87,22 @@ type Counts struct{ Total, Complete, Uncertain, Skipped, Other, Remaining int }
 // only queue records are shown and editable, every other line is preserved byte for byte, and writes refuse when
 // the file changed on disk since it was last read or written.
 type Session struct {
-	schema    *Schema
-	queuePath string
-	outPath   string
-	items     []Item
-	labels    map[string]Label // saved labels of queue records by id
-	drafts    map[int]Draft    // pending edits by queue index; only entries differing from the saved values
-	undo      []undoEntry      // successful marks of this session, most recent last
-	filter    Filter
-	cursor    int
-	marked    int
-	now       func() time.Time
-	start     time.Time
-	recheck   *recheckState // nil in a normal session
-	proposals *proposalSet  // nil unless LoadProposals succeeded
+	schema     *Schema
+	queuePath  string
+	schemaPath string // "" in a session opened from an in-memory schema (OpenRecheckItems)
+	outPath    string
+	items      []Item
+	byID       map[string]int   // queue index by record id
+	labels     map[string]Label // saved labels of queue records by id
+	drafts     map[int]Draft    // pending edits by queue index; only entries differing from the saved values
+	undo       []undoEntry      // successful marks of this session, most recent last
+	filter     Filter
+	cursor     int
+	marked     int
+	now        func() time.Time
+	start      time.Time
+	recheck    *recheckState // nil in a normal session
+	proposals  *proposalSet  // nil unless LoadProposals succeeded
 }
 
 // recheckState is the canonical labels file of a re-check session.
@@ -109,10 +111,16 @@ type recheckState struct {
 	base *labelFile // as last read or written: must equal the file on disk before each write
 }
 
-// undoEntry records the saved label a successful Mark replaced: prev is meaningful only when had is true.
+// undoEntry records what one successful save (Mark, SaveLabel or SaveLabels) replaced: one item per saved record,
+// in ascending queue-index order.
 type undoEntry struct {
-	index int   // queue index of the marked record
-	had   bool  // the record had a saved label before the mark
+	items []undoItem
+}
+
+// undoItem is the saved label one record had before a save: prev is meaningful only when had is true.
+type undoItem struct {
+	index int   // queue index of the record
+	had   bool  // the record had a saved label before the save
 	prev  Label // that label (deep copied)
 }
 
@@ -145,14 +153,40 @@ func OpenRecheck(queuePath, schemaPath, labelsPath string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := loadLabelFile(labelsPath, s.schema, s.items)
-	if err != nil {
+	if err := s.attachRecheck(); err != nil {
 		return nil, err
+	}
+	return s, nil
+}
+
+// OpenRecheckItems is OpenRecheck over an in-memory schema and queue (for instance a project pulled from quet-web):
+// there is no queue or schema file, so QueuePath and SchemaPath are "". Errors: no items, an unusable labels path
+// (checkOut), a missing labels file and any invalid line. Cursor starts at 0; filter = FilterAll.
+func OpenRecheckItems(schema *Schema, items []Item, labelsPath string) (*Session, error) {
+	if len(items) == 0 {
+		return nil, errors.New("queue has no records")
+	}
+	if err := checkOut(labelsPath, ""); err != nil {
+		return nil, err
+	}
+	s := &Session{schema: schema, outPath: labelsPath, items: items, byID: indexItems(items), drafts: map[int]Draft{}}
+	s.SetClock(time.Now)
+	if err := s.attachRecheck(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// attachRecheck loads the canonical labels file at the session's out path and turns s into a re-check session.
+func (s *Session) attachRecheck() error {
+	f, err := loadLabelFile(s.outPath, s.schema, s.items)
+	if err != nil {
+		return err
 	}
 	s.labels = f.queueLabels(s.items)
 	s.recheck = &recheckState{orig: f, base: f}
 	s.filter = FilterAll
-	return s, nil
+	return nil
 }
 
 // open loads schema and queue and checks the labels path (checkOut) for Open and OpenRecheck; labels are not loaded.
@@ -172,29 +206,43 @@ func open(queuePath, schemaPath, outPath string) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{
-		schema:    schema,
-		queuePath: queuePath,
-		outPath:   outPath,
-		items:     items,
-		drafts:    map[int]Draft{},
+		schema:     schema,
+		queuePath:  queuePath,
+		schemaPath: schemaPath,
+		outPath:    outPath,
+		items:      items,
+		byID:       indexItems(items),
+		drafts:     map[int]Draft{},
 	}
 	s.SetClock(time.Now)
 	return s, nil
 }
 
-// checkOut rejects an out path that resolves to the queue file or whose parent directory is missing.
+// indexItems maps each record id to its queue index.
+func indexItems(items []Item) map[string]int {
+	byID := make(map[string]int, len(items))
+	for i, it := range items {
+		byID[it.ID] = i
+	}
+	return byID
+}
+
+// checkOut rejects an out path whose parent directory is missing and, unless queuePath is "" (no queue file), one
+// that resolves to the queue file.
 func checkOut(outPath, queuePath string) error {
 	outAbs, err := filepath.Abs(outPath)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", outPath, err)
 	}
-	queueAbs, err := filepath.Abs(queuePath)
-	if err != nil {
-		return fmt.Errorf("resolve %s: %w", queuePath, err)
-	}
+	queueAbs := ""
 	sameErr := fmt.Errorf("labels file %s is the queue file %s; refusing to write over it", outPath, queuePath)
-	if realPath(outAbs) == realPath(queueAbs) {
-		return sameErr
+	if queuePath != "" {
+		if queueAbs, err = filepath.Abs(queuePath); err != nil {
+			return fmt.Errorf("resolve %s: %w", queuePath, err)
+		}
+		if realPath(outAbs) == realPath(queueAbs) {
+			return sameErr
+		}
 	}
 	dir := filepath.Dir(outAbs)
 	fi, err := os.Stat(dir)
@@ -206,6 +254,9 @@ func checkOut(outPath, queuePath string) error {
 	}
 	if !fi.IsDir() {
 		return fmt.Errorf("output directory %s is not a directory", dir)
+	}
+	if queuePath == "" {
+		return nil
 	}
 	if oi, err := os.Stat(outAbs); err == nil {
 		if qi, err := os.Stat(queueAbs); err == nil && os.SameFile(oi, qi) {
@@ -232,6 +283,9 @@ func (s *Session) Schema() *Schema { return s.schema }
 // QueuePath returns the queue file path as given to Open or OpenRecheck.
 func (s *Session) QueuePath() string { return s.queuePath }
 
+// SchemaPath returns the schema file path as given to Open or OpenRecheck ("" for OpenRecheckItems).
+func (s *Session) SchemaPath() string { return s.schemaPath }
+
 // OutPath returns the labels file path as given to Open or OpenRecheck.
 func (s *Session) OutPath() string { return s.outPath }
 
@@ -255,6 +309,12 @@ func (s *Session) Len() int { return len(s.items) }
 
 // Item returns queue record i.
 func (s *Session) Item(i int) Item { return s.items[i] }
+
+// IndexOf returns the queue index of the record with the given id.
+func (s *Session) IndexOf(id string) (int, bool) {
+	i, ok := s.byID[id]
+	return i, ok
+}
 
 // Label returns a deep copy of the saved label of record i, if any.
 func (s *Session) Label(i int) (Label, bool) {
@@ -455,15 +515,28 @@ func (s *Session) Mark(i int, status string) error {
 // spans and span statuses of d and note (the existing saved note when note is empty), then validates, saves, drops
 // the draft, counts the mark and pushes the undo entry. Nothing changes on error.
 func (s *Session) mark(i int, status string, d Draft, note string) error {
-	if !s.schema.HasStatus(status) {
-		return fmt.Errorf("status %q is not declared in the schema", status)
-	}
-	item := s.items[i]
-	prev, had := s.labels[item.ID]
 	if note == "" {
-		note = prev.Note
+		note = s.labels[s.items[i].ID].Note
 	}
-	l := Label{ID: item.ID, Status: status, Spans: make(map[string]*Target, len(s.schema.Spans)), Note: note}
+	l, err := s.composeLabel(s.items[i].ID, status, d, note)
+	if err != nil {
+		return err
+	}
+	if err := s.schema.Validate(l, s.items[i].Text); err != nil {
+		return err
+	}
+	return s.commit(map[int]Label{i: l})
+}
+
+// composeLabel builds the label of record id from status, the type, spans and span statuses of d and note as
+// given. A status the schema lists in null_label_statuses yields a null type and null spans; otherwise spans null for
+// the type are forced null and every status-bearing span that is not null for the type gets its draft status or
+// the default. Error: status not declared. The label is not validated against the record text.
+func (s *Session) composeLabel(id, status string, d Draft, note string) (Label, error) {
+	if !s.schema.HasStatus(status) {
+		return Label{}, fmt.Errorf("status %q is not declared in the schema", status)
+	}
+	l := Label{ID: id, Status: status, Spans: make(map[string]*Target, len(s.schema.Spans)), Note: note}
 	nullLabel := s.schema.NullLabel(status)
 	if !nullLabel && d.Type != "" {
 		l.Type = new(d.Type)
@@ -481,17 +554,110 @@ func (s *Session) mark(i int, status string, d Draft, note string) error {
 			l.SpanStatus[sp.Name] = st
 		}
 	}
-	if err := s.schema.Validate(l, item.Text); err != nil {
+	return l, nil
+}
+
+// SaveLabel saves l as the label of record i through the same path as Mark: status must be declared; a status in
+// null_label_statuses drops type, spans and span statuses; otherwise spans null for l's type are forced null and each
+// status-bearing span gets l's span status or the default; then Validate against the record text, atomic write
+// (save), draft dropped and one undo entry. l may come from any source (a collaborator's label): l.ID is ignored
+// (the id of record i is used) and l.Note is kept as given ("" = no note, not the previous note). Nothing changes
+// on error. Does NOT move the cursor.
+func (s *Session) SaveLabel(i int, l Label) error {
+	if i < 0 || i >= len(s.items) {
+		return fmt.Errorf("record index %d out of range", i)
+	}
+	built, err := s.fromLabel(i, l)
+	if err != nil {
 		return err
 	}
-	s.labels[item.ID] = l
+	return s.commit(map[int]Label{i: built})
+}
+
+// SaveLabels saves many records, keyed by queue index, like SaveLabel but with ONE file write and ONE undo entry
+// (Undo reverts the whole batch). Nothing is changed when any label fails (the error names the record id; records
+// are checked in queue order) or the write fails. An empty map does nothing.
+func (s *Session) SaveLabels(labels map[int]Label) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	built := make(map[int]Label, len(labels))
+	for _, i := range sortedIndexes(labels) {
+		if i < 0 || i >= len(s.items) {
+			return fmt.Errorf("record index %d out of range", i)
+		}
+		b, err := s.fromLabel(i, labels[i])
+		if err != nil {
+			return fmt.Errorf("record %s: %w", s.items[i].ID, err)
+		}
+		built[i] = b
+	}
+	return s.commit(built)
+}
+
+// fromLabel builds and validates the label to save for record i from the foreign label l (see SaveLabel).
+func (s *Session) fromLabel(i int, l Label) (Label, error) {
+	item := s.items[i]
+	d := Draft{Spans: l.Spans, SpanStatus: l.SpanStatus}
+	if l.Type != nil {
+		d.Type = *l.Type
+	}
+	built, err := s.composeLabel(item.ID, l.Status, d, l.Note)
+	if err != nil {
+		return Label{}, err
+	}
+	if !s.schema.NullLabel(l.Status) {
+		// compose only keeps statuses of declared spans; keep the others so Validate rejects them.
+		for name, st := range l.SpanStatus {
+			if _, declared := s.schema.Span(name); !declared {
+				if built.SpanStatus == nil {
+					built.SpanStatus = map[string]string{}
+				}
+				built.SpanStatus[name] = st
+			}
+		}
+	}
+	if err := s.schema.Validate(built, item.Text); err != nil {
+		return Label{}, err
+	}
+	return built, nil
+}
+
+// sortedIndexes returns the keys of m in ascending order.
+func sortedIndexes(m map[int]Label) []int {
+	idx := make([]int, 0, len(m))
+	for i := range m {
+		idx = append(idx, i)
+	}
+	slices.Sort(idx)
+	return idx
+}
+
+// commit stores the already validated labels (by queue index) as the saved labels of their records and writes the
+// labels file once (save). On success the drafts of those records are dropped, the mark count grows by one per
+// record and one undo entry holding every replaced label is pushed. On a write failure the in-memory labels are
+// restored and nothing else changes.
+func (s *Session) commit(built map[int]Label) error {
+	idx := sortedIndexes(built)
+	entry := undoEntry{items: make([]undoItem, 0, len(idx))}
+	for _, i := range idx {
+		prev, had := s.labels[s.items[i].ID]
+		entry.items = append(entry.items, undoItem{index: i, had: had, prev: copyLabel(prev)})
+	}
+	for _, i := range idx {
+		s.labels[s.items[i].ID] = built[i]
+	}
 	if err := s.save(); err != nil {
-		s.restoreLabel(item.ID, had, prev)
+		for _, it := range entry.items {
+			s.restoreLabel(s.items[it.index].ID, it.had, it.prev)
+		}
 		return err
 	}
-	s.undo = append(s.undo, undoEntry{index: i, had: had, prev: copyLabel(prev)})
-	delete(s.drafts, i)
-	s.marked++
+	s.undo = append(s.undo, entry)
+	for _, i := range idx {
+		delete(s.drafts, i)
+	}
+	s.marked += len(idx)
 	return nil
 }
 
@@ -518,35 +684,50 @@ func (s *Session) save() error {
 	return nil
 }
 
-// CanUndo reports whether Undo has a mark to revert.
+// CanUndo reports whether Undo has a save to revert.
 func (s *Session) CanUndo() bool { return len(s.undo) > 0 }
 
-// Undo reverts the most recent successful Mark of this session not yet undone: restores the record's previous saved
-// label (or removes it if it had none), rewrites the labels file atomically (save), drops the record's draft, moves the
-// cursor to it and decrements the session mark count (not below 0). Returns the record's queue index and a short
-// description ("restored <status>" or "removed label"); ok=false when there is nothing to undo. On write failure
-// the in-memory state is left as before the Undo, the entry stays on the stack and err is returned.
+// Undo reverts the most recent successful save of this session not yet undone (Mark, SaveLabel or SaveLabels):
+// restores each record's previous saved label (or removes it if it had none), rewrites the labels file atomically
+// (save) once, drops the records' drafts, moves the cursor to the first of them and decrements the session mark
+// count by the number of records (not below 0). Returns that queue index and a short description: for one record
+// "restored <status>" or "removed label", for a batch "reverted <n> labels". ok=false when there is nothing to undo.
+// On write failure the in-memory state is left as before the Undo, the entry stays on the stack and err is returned.
 func (s *Session) Undo() (index int, desc string, ok bool, err error) {
 	if len(s.undo) == 0 {
 		return 0, "", false, nil
 	}
 	e := s.undo[len(s.undo)-1]
-	id := s.items[e.index].ID
-	cur, curHad := s.labels[id]
-	s.restoreLabel(id, e.had, e.prev)
+	type current struct {
+		label Label
+		had   bool
+	}
+	cur := make([]current, len(e.items))
+	for k, it := range e.items {
+		id := s.items[it.index].ID
+		cur[k].label, cur[k].had = s.labels[id]
+		s.restoreLabel(id, it.had, it.prev)
+	}
+	first := e.items[0].index
 	if err := s.save(); err != nil {
-		s.restoreLabel(id, curHad, cur)
-		return e.index, "", false, err
+		for k, it := range e.items {
+			s.restoreLabel(s.items[it.index].ID, cur[k].had, cur[k].label)
+		}
+		return first, "", false, err
 	}
 	s.undo = s.undo[:len(s.undo)-1]
-	delete(s.drafts, e.index)
-	s.cursor = e.index
-	s.marked = max(0, s.marked-1)
-	desc = "removed label"
-	if e.had {
-		desc = "restored " + e.prev.Status
+	for _, it := range e.items {
+		delete(s.drafts, it.index)
 	}
-	return e.index, desc, true, nil
+	s.cursor = first
+	s.marked = max(0, s.marked-len(e.items))
+	if len(e.items) > 1 {
+		return first, fmt.Sprintf("reverted %d labels", len(e.items)), true, nil
+	}
+	if e.items[0].had {
+		return first, "restored " + e.items[0].prev.Status, true, nil
+	}
+	return first, "removed label", true, nil
 }
 
 // Counts summarises the saved labels.

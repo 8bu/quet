@@ -436,6 +436,20 @@ func decodeLabel(schema *Schema, line []byte) (Label, error) {
 	return l, nil
 }
 
+// ParseLabel decodes one label JSON object strictly under schema, with the same rules as a labels-file line: exactly
+// the known keys, id/annotation_status/type and every span present, spans null or well-formed objects. It does not
+// validate against the schema or a record text (Schema.Validate does).
+func ParseLabel(schema *Schema, data []byte) (Label, error) {
+	return decodeLabel(schema, data)
+}
+
+// LabelsEqual reports whether a and b have the same status, type, spans (a missing span equals a null one), span
+// statuses (nil equals empty) and note. Ids are ignored.
+func LabelsEqual(a, b Label) bool {
+	a.ID, b.ID = "", ""
+	return labelEqual(a, b)
+}
+
 // decodeTarget strictly decodes the value of the span called name: an object with exactly text (string), start and
 // end (integers). Errors are prefixed with name ("target" for a schema without spans).
 func decodeTarget(name string, raw json.RawMessage) (Target, error) {
