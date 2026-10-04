@@ -92,6 +92,9 @@ func (s *Session) checkProposalsPath(path string) error {
 		return fmt.Errorf("check proposals file: %w", err)
 	}
 	for _, other := range []struct{ path, what string }{{s.queuePath, "queue"}, {s.outPath, "labels"}} {
+		if other.path == "" { // an in-memory queue (OpenRecheckItems) has no queue file
+			continue
+		}
 		same, err := sameFile(path, other.path)
 		if err != nil {
 			return err
@@ -204,8 +207,8 @@ func optionalString(fields map[string]json.RawMessage, key string) (string, erro
 // HasProposals reports whether LoadProposals succeeded.
 func (s *Session) HasProposals() bool { return s.proposals != nil }
 
-// ProposalsPath returns the proposals file path as given to LoadProposals ("" when none is loaded).
-func (s *Session) ProposalsPath() string {
+// ProposalsSource returns the proposals file path as given to LoadProposals ("" when none is loaded).
+func (s *Session) ProposalsSource() string {
 	if s.proposals == nil {
 		return ""
 	}

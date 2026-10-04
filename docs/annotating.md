@@ -507,6 +507,13 @@ target, else on the first word. A word is a run of letters, digits and combining
 A selection that is not a valid target (for example one that starts or ends with a space) is refused
 on `enter` with the reason, and span mode stays open.
 
+## Sharing with quet-web
+
+`quet web push` publishes a queue, its schema and proposals to a quet-web server, and `quet web
+pull` brings collaborators' labels back into a labels file (including `--labels`, which merges like
+a [re-check](#re-check-subset)). In the annotation screen `w` opens the Web menu: link a remote and
+project, publish, and compare collaborators' labels record by record. See [Web sync](web.md).
+
 ## Offsets
 
 `start` and `end` count Unicode code points (Go runes), not bytes and not UTF-16 units: `start` is

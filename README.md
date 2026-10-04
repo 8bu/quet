@@ -11,8 +11,8 @@ generate → quet → review → export
 Open a corpus, approve or reject each record with a single key, and export the records you kept.
 Every review action is also a plain command with JSON output, so scripts and AI agents can review
 without the TUI. Everything is local: one static binary and one SQLite sidecar file next to your
-corpus. No telemetry, no network access unless you run `quet update` or opt in to `update.check`,
-and the source file is never modified.
+corpus. No telemetry, no network access unless you run `quet update`, opt in to `update.check`, or use
+[`quet web`](docs/web.md) with your own quet-web server, and the source file is never modified.
 
 ## Install
 
@@ -131,12 +131,28 @@ See [Annotating](docs/annotating.md) and its [Re-check subset](docs/annotating.m
 [Proposals](docs/annotating.md#proposals) and
 [Multiple span fields](docs/annotating.md#multiple-span-fields) sections.
 
+### Sharing with quet-web
+
+`quet web` publishes a queue, schema and proposals to a [quet-web](docs/web.md) server and pulls
+every collaborator's labels back, either into a labels file you pick or (in the `quet annotate`
+TUI, key `w`) record by record in a compare mode.
+
+```sh
+quet web remote add origin https://quet.8bu.dev   # once; then: quet web login
+quet web push queue.jsonl --schema schema.yaml --project expenses
+quet web pull --project expenses --all --out-dir pulled/
+```
+
+Credentials are a Cloudflare Access service token kept in `~/.config/quet/remotes.yaml` (mode
+0600) and never printed. See [Web sync](docs/web.md).
+
 ## Documentation
 
 | | |
 | --- | --- |
 | [Usage](docs/usage.md) | Command line, file browser, `init`, `stats`, `update` |
 | [Annotating](docs/annotating.md) | `quet annotate`: schemas, multiple span fields, labels output, validation, re-check subsets, proposals, span keys, offsets |
+| [Web sync](docs/web.md) | `quet web`: remotes, login, push, list, pull, the sidecar, and the annotate web menu and compare mode |
 | [Reviewing](docs/reviewing.md) | Statuses, auto-advance, undo, keybindings, flags, editing config |
 | [Diagnostics](docs/diagnostics.md) | The six hints Quet computes locally and their thresholds |
 | [Input formats](docs/formats.md) | `.jsonl`, `.json`, `.txt` and how metadata is preserved |

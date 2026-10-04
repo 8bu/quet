@@ -59,9 +59,10 @@ func TestParseSchemaSequenceForm(t *testing.T) {
 		t.Fatalf("ParseSchema: %v", err)
 	}
 	want := &Schema{
-		Types:    []TypeDef{{Name: "b"}, {Name: "a"}, {Name: "c"}},
-		Statuses: []StatusDef{{Name: "complete"}, {Name: "later"}},
-		Spans:    []SpanDef{{Name: "target"}},
+		Types:          []TypeDef{{Name: "b"}, {Name: "a"}, {Name: "c"}},
+		Statuses:       []StatusDef{{Name: "complete"}, {Name: "later"}},
+		Spans:          []SpanDef{{Name: "target"}},
+		ImplicitTarget: true,
 	}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("got %+v, want %+v", s, want)

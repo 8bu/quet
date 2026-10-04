@@ -41,6 +41,9 @@ type Schema struct {
 	// Spans are the declared span fields in YAML order and are never empty. A schema without a spans key has
 	// exactly one span, target, whose NullForTypes are the schema's null_target_types.
 	Spans []SpanDef
+	// ImplicitTarget is true when the schema had no spans key (or a null one): Spans is then the single implicit
+	// target span.
+	ImplicitTarget bool
 	// NullLabelStatuses are the statuses Mark saves with a null type and null spans. When the schema has no
 	// null_label_statuses key it defaults to [skipped] if skipped is declared (Quet's skip role means "no label").
 	// Loading does not enforce it, so older labels that break the rule still open and can be re-marked.
@@ -136,6 +139,7 @@ func ParseSchema(data []byte) (*Schema, error) {
 			return nil, err
 		}
 		s.Spans = []SpanDef{{Name: implicitSpan, NullForTypes: nullTargetTypes}}
+		s.ImplicitTarget = true
 	}
 	if s.NullLabelStatuses, err = parseNames("null_label_statuses", "status", fields["null_label_statuses"], s.HasStatus); err != nil {
 		return nil, err

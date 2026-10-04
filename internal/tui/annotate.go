@@ -35,6 +35,20 @@ const (
 	annotHelp
 	// annotGoto reads a queue position or record id to jump to.
 	annotGoto
+	// annotWebMenu is the Web menu: link status, remote & project, publish, compare.
+	annotWebMenu
+	// annotWebRemotes picks the remote of the link.
+	annotWebRemotes
+	// annotWebForm adds a remote.
+	annotWebForm
+	// annotWebProjects picks or names the project of the link.
+	annotWebProjects
+	// annotWebConfirm confirms a publish.
+	annotWebConfirm
+	// annotWebBusy waits for a network call.
+	annotWebBusy
+	// annotCompare browses and picks the collaborators' labels.
+	annotCompare
 )
 
 // annotModel is the Bubble Tea model of annotation mode. It is separate from
@@ -61,6 +75,8 @@ type annotModel struct {
 	activeSpan int // index into Schema().Spans of the field x, n, c and enter act on
 
 	gotoQuery []rune // annotGoto input: a 1-based queue position or a record id
+
+	web webState // the quet-web link, its flows and the compare data
 }
 
 // newAnnotModel returns the annotation model over s. A session with proposals starts
