@@ -75,7 +75,7 @@ func TestWebLinkFormSavesRemoteAndSidecar(t *testing.T) {
 	for range remoteURLPrefill {
 		m, _ = webPress(t, m, "backspace")
 	}
-	m, _ = sendAnnot(m, pasteKey(f.URL), webKey("enter"), pasteKey("id.access"), webKey("enter"), pasteKey("sekret"))
+	m, _ = sendAnnot(m, pasteKey(f.URL), webKey("enter"), webKey("right"), webKey("enter"), pasteKey("id.access"), webKey("enter"), pasteKey("sekret"))
 	v = m.View()
 	if !strings.Contains(v, "••••••") || strings.Contains(v, "sekret") {
 		t.Errorf("secret not masked:\n%s", v)

@@ -45,7 +45,7 @@ func (m annotModel) webModeBody(w, h int) string {
 	return overlayBox(title, w, h, ow, rows, sel)
 }
 
-// webMenuContent renders the Web menu: the link status, the three actions and the last result in full.
+// webMenuContent renders the Web menu: the link status, the four actions and the last result in full.
 func (m annotModel) webMenuContent(iw int) ([]string, int) {
 	iw = max(iw, 1)
 	link := styleMuted.Render("Link: not linked")
@@ -53,7 +53,7 @@ func (m annotModel) webMenuContent(iw int) ([]string, int) {
 		link = "Link: " + styleAccent.Render(linkName(m.web.link))
 	}
 	rows := []string{truncateLine(link, iw), ""}
-	items := []string{"Remote & project…  (r)", "Publish  (p)", "Compare collaborators  (c)"}
+	items := []string{"Remote & project…  (r)", "Publish  (p)", "Compare collaborators  (c)", "Log in again  (l)"}
 	list, sel := listRows(len(items), m.web.cursor, len(items), func(i int) string { return items[i] })
 	rows, sel = appendList(rows, list, sel)
 	if m.web.note != "" {
@@ -80,7 +80,10 @@ func (m annotModel) webRemotesContent(iw, maxRows int) ([]string, int) {
 		}
 		r := remotes[i]
 		creds := "no credentials"
-		if r.ClientID != "" && r.ClientSecret != "" {
+		switch {
+		case r.OAuth != nil:
+			creds = "browser login"
+		case r.ClientID != "" && r.ClientSecret != "":
 			creds = "credentials set"
 		}
 		line := fmt.Sprintf("%s  %s  %s", r.Name, r.URL, styleMuted.Render(creds))
@@ -93,24 +96,43 @@ func (m annotModel) webRemotesContent(iw, maxRows int) ([]string, int) {
 }
 
 // webFormContent renders the add-remote form: one line per field (the secret masked, the focused field with a
-// caret) and a hint about where it is saved.
+// caret), the login choice and a hint about what happens on save. The credential fields are muted while the
+// browser login is chosen.
 func (m annotModel) webFormContent(iw int) []string {
 	iw = max(iw, 1)
+	f := m.web.form
 	var rows []string
 	for k := range formFields {
-		value := string(m.web.form.fields[k])
-		if k == formSecret {
-			value = strings.Repeat("•", len([]rune(value)))
-		}
 		label := fmt.Sprintf("%-13s", formLabels[k])
-		if k == m.web.form.focus {
+		var value string
+		switch k {
+		case formAuth:
+			value = "(•) Browser  ( ) Service token"
+			if f.token {
+				value = "( ) Browser  (•) Service token"
+			}
+		case formSecret:
+			value = strings.Repeat("•", len(f.fields[k]))
+		default:
+			value = string(f.fields[k])
+		}
+		if k == f.focus {
 			label = styleAccent.Render(label)
-			value += "▏"
+			if k != formAuth {
+				value += "▏"
+			}
+		} else if !f.active(k) {
+			label, value = styleMuted.Render(label), styleMuted.Render(value)
 		}
 		rows = append(rows, truncateLine(label+" "+value, iw))
 	}
+	hint := "Enter opens your browser to log in with Cloudflare Access. The remote is saved when you finish."
+	if f.token {
+		hint = "A service token is for CI. Enter saves the remote with the token."
+	}
+	hint += " A name that exists replaces that remote. Saved to " + web.RemotesPath() + " (mode 0600)."
 	rows = append(rows, "")
-	rows = append(rows, wrapRows([]string{"A name that exists replaces that remote. Saved to " + web.RemotesPath() + " (mode 0600)."}, iw)...)
+	rows = append(rows, wrapRows([]string{hint}, iw)...)
 	for i := len(rows) - 1; i >= 0 && rows[i] != ""; i-- {
 		rows[i] = styleMuted.Render(rows[i])
 	}
@@ -371,7 +393,7 @@ func (m annotModel) webFooterItems() []string {
 	case annotWebRemotes:
 		return []string{"j/k move", "enter pick", "n add remote", "esc back"}
 	case annotWebForm:
-		return []string{"type to edit", "tab/↑/↓ field", "enter next/save", "ctrl+s save", "esc back"}
+		return []string{"type to edit", "tab/↑/↓ field", "space/←/→ browser or token", "enter next/save", "esc back"}
 	case annotWebProjects:
 		return []string{"↑/↓ move", "type to name a new project", "enter link", "esc back"}
 	case annotWebConfirm:
@@ -385,14 +407,14 @@ func (m annotModel) webFooterItems() []string {
 		return []string{"1-9 pick", "[/] prev/next disagreement", "a/d prev/next with remote labels",
 			"A accept unanimous", "z undo", "? help", "esc back"}
 	}
-	return []string{"j/k move", "enter choose", "r remote & project", "p publish", "c compare", "esc close"}
+	return []string{"j/k move", "enter choose", "r remote & project", "p publish", "c compare", "l log in again", "esc close"}
 }
 
 // webHelpGroups returns the help groups of the web integration: the menu key and the compare keys.
 func webHelpGroups() []helpGroup {
 	return []helpGroup{
 		{"Web", []helpItem{
-			{"w", "Web menu: link, publish, compare"},
+			{"w", "Web menu: link, publish, compare, log in again"},
 		}},
 		{"Compare", []helpItem{
 			{"1-9", "Pick candidate N"},

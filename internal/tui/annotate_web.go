@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,22 +32,48 @@ const (
 	webAfterCompare
 )
 
-// Form field indexes of remoteForm.
+// Form field indexes of remoteForm. The Client ID and Client secret rows only take part when the service
+// token login is chosen.
 const (
 	formName = iota
 	formURL
+	formAuth
 	formClientID
 	formSecret
 	formFields
 )
 
 // formLabels are the displayed names of the remote form fields.
-var formLabels = [formFields]string{"Name", "URL", "Client ID", "Client secret"}
+var formLabels = [formFields]string{"Name", "URL", "Log in with", "Client ID", "Client secret"}
 
-// remoteForm is the state of the add-remote form: one rune buffer per field and the focused field.
+// remoteForm is the state of the add-remote form: one rune buffer per field, the focused field and the login
+// method (browser by default, or a service token).
 type remoteForm struct {
 	fields [formFields][]rune
 	focus  int
+	token  bool
+}
+
+// active reports whether field i can take focus: the credential fields only with the service token login.
+func (f remoteForm) active(i int) bool { return i <= formAuth || f.token }
+
+// step returns the focusable field after (dir 1) or before (dir -1) the focused one, wrapping around.
+func (f remoteForm) step(dir int) int {
+	i := f.focus
+	for {
+		i = (i + dir + formFields) % formFields
+		if f.active(i) {
+			return i
+		}
+	}
+}
+
+// last is the final focusable field: enter on it saves the form.
+func (f remoteForm) last() int {
+	if f.token {
+		return formSecret
+	}
+	return formAuth
 }
 
 // webState is everything the web integration keeps in the annotation model: the link, the state of the
@@ -73,6 +101,8 @@ type webState struct {
 	seq      int // identifies the in-flight call; results with another seq are stale
 	cancel   context.CancelFunc
 
+	openBrowser func(url string) error // opens the login URL; nil = the platform default (tests inject one)
+
 	compare compareState
 }
 
@@ -95,6 +125,24 @@ type webPullMsg struct {
 	seq    int
 	pulled *web.Pulled
 	err    error
+}
+
+// webLoginURLMsg reports the authorization URL of a running browser login; ev is the channel that delivers
+// the following messages of that login.
+type webLoginURLMsg struct {
+	seq int
+	url string
+	ev  <-chan tea.Msg
+}
+
+// webLoginMsg is the result of a browser login. rem is the remote to store the token on; relogin tells a
+// "Log in again" from the add-remote form.
+type webLoginMsg struct {
+	seq     int
+	rem     web.Remote
+	tok     *web.OAuthToken
+	err     error
+	relogin bool
 }
 
 // linkName renders a link as "remote/project", or "default remote" when the sidecar names no remote.
@@ -171,11 +219,32 @@ func webClientFor(name string) (*web.Client, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	c, err := web.NewClient(rem)
+	c, err := web.NewClient(rem, web.WithTokenSaver(web.TokenSaver(rem.Name)))
 	if err != nil {
 		return nil, "", err
 	}
 	return c, rem.Name, nil
+}
+
+// isAuthError reports whether err is the server or Cloudflare Access refusing the credentials.
+func isAuthError(err error) bool {
+	var apiErr *web.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case http.StatusFound, http.StatusUnauthorized, http.StatusForbidden:
+			return true
+		}
+	}
+	return errors.Is(err, web.ErrSessionExpired) || strings.Contains(err.Error(), "quet web login")
+}
+
+// webErrText renders err for the status row and the Web menu; an auth error also says how to log in again.
+func webErrText(err error) string {
+	s := err.Error()
+	if isAuthError(err) {
+		s += " — press w, then Log in again"
+	}
+	return s
 }
 
 // setWebStatus is setStatus (or setError) with the longer web TTL.
@@ -240,9 +309,9 @@ func (m annotModel) openWeb() (annotModel, tea.Cmd) {
 }
 
 // webMenuItems is the number of rows of the Web menu.
-const webMenuItems = 3
+const webMenuItems = 4
 
-// updateWebMenu handles annotWebMenu: j/k move, enter or r/p/c choose, esc closes.
+// updateWebMenu handles annotWebMenu: j/k move, enter or r/p/c/l choose, esc closes.
 func (m annotModel) updateWebMenu(key string) (annotModel, tea.Cmd) {
 	switch key {
 	case "esc", "q", "w":
@@ -260,14 +329,18 @@ func (m annotModel) updateWebMenu(key string) (annotModel, tea.Cmd) {
 		return m.openPublish()
 	case "c":
 		return m.openCompare()
+	case "l":
+		return m.relogin()
 	case "enter":
 		switch m.web.cursor {
 		case 0:
 			return m.startLink(webAfterNone)
 		case 1:
 			return m.openPublish()
-		default:
+		case 2:
 			return m.openCompare()
+		default:
+			return m.relogin()
 		}
 	}
 	return m, nil
@@ -336,8 +409,9 @@ func (m annotModel) openRemoteForm() annotModel {
 	return m
 }
 
-// updateWebForm handles annotWebForm: typing edits the focused field, tab/shift+tab/↑/↓ move, enter goes to the
-// next field and saves from the last, ctrl+s saves, esc goes back.
+// updateWebForm handles annotWebForm: typing edits the focused field, tab/shift+tab/↑/↓ move, space or ←/→ on
+// the login row switch between browser login and service token, enter goes to the next field and saves from
+// the last, ctrl+s saves, esc goes back.
 func (m annotModel) updateWebForm(k tea.KeyMsg) (annotModel, tea.Cmd) {
 	f := &m.web.form
 	switch k.String() {
@@ -349,14 +423,14 @@ func (m annotModel) updateWebForm(k tea.KeyMsg) (annotModel, tea.Cmd) {
 		}
 		return m, nil
 	case "tab", "down", "ctrl+n":
-		f.focus = (f.focus + 1) % formFields
+		f.focus = f.step(1)
 		return m, nil
 	case "shift+tab", "up", "ctrl+p":
-		f.focus = (f.focus + formFields - 1) % formFields
+		f.focus = f.step(-1)
 		return m, nil
 	case "enter":
-		if f.focus < formFields-1 {
-			f.focus++
+		if f.focus < f.last() {
+			f.focus = f.step(1)
 			return m, nil
 		}
 		return m.saveRemote()
@@ -365,6 +439,17 @@ func (m annotModel) updateWebForm(k tea.KeyMsg) (annotModel, tea.Cmd) {
 	case "backspace":
 		if n := len(f.fields[f.focus]); n > 0 {
 			f.fields[f.focus] = f.fields[f.focus][:n-1]
+		}
+		return m, nil
+	}
+	if f.focus == formAuth {
+		switch k.String() {
+		case "left", "right", " ":
+			f.token = !f.token
+		case "b":
+			f.token = false
+		case "s":
+			f.token = true
 		}
 		return m, nil
 	}
@@ -378,9 +463,12 @@ func (m annotModel) updateWebForm(k tea.KeyMsg) (annotModel, tea.Cmd) {
 }
 
 // formAppend appends typed or pasted runes to the focused form field; control characters (a pasted newline)
-// are dropped.
+// are dropped. The login row takes no text.
 func (m *annotModel) formAppend(runes []rune) {
 	f := &m.web.form
+	if f.focus == formAuth {
+		return
+	}
 	for _, r := range runes {
 		if r >= ' ' && r != 0x7f {
 			f.fields[f.focus] = append(f.fields[f.focus], r)
@@ -388,18 +476,24 @@ func (m *annotModel) formAppend(runes []rune) {
 	}
 }
 
-// saveRemote validates the form and saves it in remotes.yaml (replacing a remote of the same name), then goes
-// on to the project picker of that remote.
+// saveRemote validates the form. With the service token login it saves the remote in remotes.yaml (replacing
+// a remote of the same name) and goes on to the project picker; with the browser login it starts the login,
+// and the remote is saved when the login succeeds.
 func (m annotModel) saveRemote() (annotModel, tea.Cmd) {
 	f := m.web.form
 	rem := web.Remote{
-		Name:         strings.TrimSpace(string(f.fields[formName])),
-		URL:          strings.TrimSpace(string(f.fields[formURL])),
-		ClientID:     strings.TrimSpace(string(f.fields[formClientID])),
-		ClientSecret: strings.TrimSpace(string(f.fields[formSecret])),
+		Name: strings.TrimSpace(string(f.fields[formName])),
+		URL:  strings.TrimSpace(string(f.fields[formURL])),
+	}
+	if f.token {
+		rem.ClientID = strings.TrimSpace(string(f.fields[formClientID]))
+		rem.ClientSecret = strings.TrimSpace(string(f.fields[formSecret]))
 	}
 	if err := rem.Validate(); err != nil {
 		return m.setError("%v", err)
+	}
+	if !f.token {
+		return m.beginLogin(rem, annotWebForm, false)
 	}
 	remotes, err := web.LoadRemotes()
 	if err != nil {
@@ -411,6 +505,103 @@ func (m annotModel) saveRemote() (annotModel, tea.Cmd) {
 	}
 	m.web.remotes = remotes
 	return m.fetchProjects(rem.Name)
+}
+
+// relogin runs the browser login again for the linked remote, from the Web menu. The new token replaces the
+// stored OAuth token (and any stored service token) of that remote.
+func (m annotModel) relogin() (annotModel, tea.Cmd) {
+	if !m.web.linked {
+		return m.webDone(true, "not linked: pick a remote with Remote & project first")
+	}
+	remotes, err := web.LoadRemotes()
+	if err != nil {
+		return m.webDone(true, "%v", err)
+	}
+	rem, err := remotes.Resolve(m.web.link.Remote)
+	if err != nil {
+		return m.webDone(true, "%v", err)
+	}
+	stored, ok := remotes.Get(rem.Name)
+	if !ok {
+		return m.webDone(true, "remote %q is not in %s: nothing to log in to", rem.Name, web.RemotesPath())
+	}
+	stored.URL = rem.URL
+	return m.beginLogin(stored, annotWebMenu, true)
+}
+
+// beginLogin runs the browser login for rem as a tea.Cmd and shows the busy screen with the login URL once
+// it is known. back is the mode that esc returns to; relogin tells the result handler to stay on the Web menu.
+func (m annotModel) beginLogin(rem web.Remote, back annotMode, relogin bool) (annotModel, tea.Cmd) {
+	m, ctx, seq := m.beginWeb("waiting for browser login…")
+	m.web.busyBack = back
+	ev := make(chan tea.Msg, 4)
+	opt := web.LoginOptions{
+		OpenBrowser: m.web.openBrowser,
+		Notify: func(url string) {
+			select {
+			case ev <- webLoginURLMsg{seq: seq, url: url, ev: ev}:
+			default:
+			}
+		},
+	}
+	return m, func() tea.Msg {
+		go func() {
+			tok, err := web.Login(ctx, rem, opt)
+			ev <- webLoginMsg{seq: seq, rem: rem, tok: tok, err: err, relogin: relogin}
+		}()
+		return <-ev
+	}
+}
+
+// onLoginURL shows the login URL in the status row and the busy screen, then waits for the next message of the
+// login.
+func (m annotModel) onLoginURL(msg webLoginURLMsg) (annotModel, tea.Cmd) {
+	if msg.seq != m.web.seq {
+		return m, nil
+	}
+	m.web.busy = "waiting for browser login… " + msg.url
+	m.status = m.web.busy
+	return m, func() tea.Msg { return <-msg.ev }
+}
+
+// onLogin stores the token of a finished browser login on its remote. From the add-remote form it then goes on
+// to the project picker; from the Web menu it reports the login. A failed login from the form returns to the
+// form. A server that needs no login is saved without a token.
+func (m annotModel) onLogin(msg webLoginMsg) (annotModel, tea.Cmd) {
+	if msg.seq != m.web.seq {
+		return m, nil
+	}
+	m = m.endWeb()
+	noAuth := errors.Is(msg.err, web.ErrNoAuthNeeded)
+	err := msg.err
+	if noAuth {
+		err = nil
+	}
+	var remotes *web.Remotes
+	if err == nil {
+		remotes, err = web.LoadRemotes()
+	}
+	if err == nil {
+		rem := msg.rem
+		rem.SetOAuth(msg.tok)
+		remotes.Set(rem)
+		err = remotes.Save()
+	}
+	if err != nil {
+		if msg.relogin {
+			return m.webDone(true, "%s", webErrText(err))
+		}
+		m.mode = annotWebForm
+		return m.setWebStatus(true, "login failed: %s", webErrText(err))
+	}
+	if msg.relogin {
+		if noAuth {
+			return m.webDone(false, "%s needs no login: the server lets you in", msg.rem.Name)
+		}
+		return m.webDone(false, "logged in to %s", msg.rem.Name)
+	}
+	m.web.remotes = remotes
+	return m.fetchProjects(msg.rem.Name)
 }
 
 // fetchProjects lists the server's projects of remote name as a tea.Cmd and shows the busy screen meanwhile.
@@ -435,7 +626,7 @@ func (m annotModel) onProjects(msg webProjectsMsg) (annotModel, tea.Cmd) {
 	}
 	m = m.endWeb()
 	if msg.err != nil {
-		return m.webDone(true, "%v", msg.err)
+		return m.webDone(true, "%s", webErrText(msg.err))
 	}
 	m.web.projects = msg.projects
 	m.web.newSlug = []rune(defaultSlug(m.sess))
@@ -580,7 +771,7 @@ func (m annotModel) onPublish(msg webPublishMsg) (annotModel, tea.Cmd) {
 	}
 	m = m.endWeb()
 	if msg.err != nil {
-		return m.webDone(true, "%v", msg.err)
+		return m.webDone(true, "%s", webErrText(msg.err))
 	}
 	return m.webDone(false, "%s", pushSummary(linkName(m.web.link), msg.res))
 }

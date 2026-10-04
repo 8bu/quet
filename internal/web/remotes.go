@@ -27,9 +27,28 @@ const envRemoteName = "env"
 // nameRE is the syntax of a remote name.
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 
-// Remote is one named quet-web server with its Cloudflare Access service token (either may be empty for a local
-// development server).
-type Remote struct{ Name, URL, ClientID, ClientSecret string }
+// Remote is one named quet-web server with its credentials: a browser login (OAuth) or a Cloudflare Access service
+// token (ClientID and ClientSecret); both may be empty for a local development server. A stored remote never has
+// both kinds: SetOAuth and SetServiceToken clear the other.
+type Remote struct {
+	Name, URL, ClientID, ClientSecret string
+	OAuth                             *OAuthToken
+}
+
+// SetOAuth stores a browser login and clears the service token.
+func (r *Remote) SetOAuth(tok *OAuthToken) {
+	r.OAuth = tok
+	r.ClientID, r.ClientSecret = "", ""
+}
+
+// SetServiceToken stores a service token and clears the browser login.
+func (r *Remote) SetServiceToken(id, secret string) {
+	r.ClientID, r.ClientSecret = id, secret
+	r.OAuth = nil
+}
+
+// ClearCredentials removes the browser login and the service token.
+func (r *Remote) ClearCredentials() { r.SetServiceToken("", "") }
 
 // Remotes is the contents of remotes.yaml: the default remote's name and the remotes in file order.
 type Remotes struct {
@@ -39,9 +58,10 @@ type Remotes struct {
 
 // remoteEntry is one remote as stored under its name in remotes.yaml.
 type remoteEntry struct {
-	URL          string `yaml:"url"`
-	ClientID     string `yaml:"client_id,omitempty"`
-	ClientSecret string `yaml:"client_secret,omitempty"`
+	URL          string      `yaml:"url"`
+	ClientID     string      `yaml:"client_id,omitempty"`
+	ClientSecret string      `yaml:"client_secret,omitempty"`
+	OAuth        *OAuthToken `yaml:"oauth,omitempty"`
 }
 
 // remoteMap is the remotes mapping of remotes.yaml; it keeps the file order.
@@ -67,7 +87,7 @@ func (m *remoteMap) UnmarshalYAML(n *yaml.Node) error {
 		if err := n.Content[k+1].Decode(&e); err != nil {
 			return fmt.Errorf("remote %q: %w", key.Value, err)
 		}
-		*m = append(*m, Remote{Name: key.Value, URL: e.URL, ClientID: e.ClientID, ClientSecret: e.ClientSecret})
+		*m = append(*m, Remote{Name: key.Value, URL: e.URL, ClientID: e.ClientID, ClientSecret: e.ClientSecret, OAuth: e.OAuth})
 	}
 	return nil
 }
@@ -77,7 +97,7 @@ func (m remoteMap) MarshalYAML() (any, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	for _, r := range m {
 		var val yaml.Node
-		if err := val.Encode(remoteEntry{URL: r.URL, ClientID: r.ClientID, ClientSecret: r.ClientSecret}); err != nil {
+		if err := val.Encode(remoteEntry{URL: r.URL, ClientID: r.ClientID, ClientSecret: r.ClientSecret, OAuth: r.OAuth}); err != nil {
 			return nil, err
 		}
 		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: r.Name}, &val)
@@ -257,9 +277,31 @@ func (r *Remotes) Remove(name string) error {
 	return nil
 }
 
+// SaveOAuth reloads remotes.yaml, stores tok as the browser login of the remote called name (clearing its service
+// token) and saves the file. The CLI and the TUI use it after a login and, through TokenSaver, after each refresh.
+func SaveOAuth(name string, tok *OAuthToken) error {
+	remotes, err := LoadRemotes()
+	if err != nil {
+		return err
+	}
+	i := remotes.index(name)
+	if i < 0 {
+		return fmt.Errorf("unknown remote %q", name)
+	}
+	remotes.List[i].SetOAuth(tok)
+	return remotes.Save()
+}
+
+// TokenSaver returns the WithTokenSaver function that persists the refreshed login of the remote called name.
+func TokenSaver(name string) func(*OAuthToken) error {
+	return func(tok *OAuthToken) error { return SaveOAuth(name, tok) }
+}
+
 // Resolve picks the remote to use: the one called name; else the default; else a synthetic remote "env" with URL
 // $QUET_WEB_URL (an error when that is unset too). QUET_WEB_URL, QUET_ACCESS_CLIENT_ID and QUET_ACCESS_CLIENT_SECRET,
-// when non-empty, then override the URL, client id and client secret of the picked remote.
+// when non-empty, then override the URL, client id and client secret of the picked remote. A service token from the
+// environment (both variables set) wins over a stored browser login, which is then dropped from the result; so is
+// the login when QUET_WEB_URL points elsewhere, so a token never goes to another server.
 func (r *Remotes) Resolve(name string) (Remote, error) {
 	var rem Remote
 	switch {
@@ -281,6 +323,9 @@ func (r *Remotes) Resolve(name string) (Remote, error) {
 		return Remote{}, fmt.Errorf("no remote configured: run `quet web remote add <name> <url>` or set %s", EnvURL)
 	}
 	if v := os.Getenv(EnvURL); v != "" {
+		if normalizeURL(v) != normalizeURL(rem.URL) {
+			rem.OAuth = nil
+		}
 		rem.URL = v
 	}
 	if v := os.Getenv(EnvClientID); v != "" {
@@ -288,6 +333,9 @@ func (r *Remotes) Resolve(name string) (Remote, error) {
 	}
 	if v := os.Getenv(EnvClientSecret); v != "" {
 		rem.ClientSecret = v
+	}
+	if os.Getenv(EnvClientID) != "" && os.Getenv(EnvClientSecret) != "" {
+		rem.OAuth = nil
 	}
 	return rem, nil
 }

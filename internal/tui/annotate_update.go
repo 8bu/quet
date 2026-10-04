@@ -28,6 +28,10 @@ func (m annotModel) update(msg tea.Msg) (annotModel, tea.Cmd) {
 		return m.onPublish(msg)
 	case webPullMsg:
 		return m.onPull(msg)
+	case webLoginURLMsg:
+		return m.onLoginURL(msg)
+	case webLoginMsg:
+		return m.onLogin(msg)
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}

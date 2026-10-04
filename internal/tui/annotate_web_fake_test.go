@@ -270,7 +270,8 @@ func linkedModel(t *testing.T) (annotModel, *fakeWeb, string) {
 	return m, f, labelsPath
 }
 
-// webKey is a key message by name: "enter", "esc", "tab", "ctrl+s", "backspace", "down", "up" or one rune.
+// webKey is a key message by name: "enter", "esc", "tab", "ctrl+s", "backspace", "down", "up", "left", "right",
+// "space" or one rune.
 func webKey(name string) tea.Msg {
 	switch name {
 	case "enter":
@@ -287,6 +288,12 @@ func webKey(name string) tea.Msg {
 		return specialKey(tea.KeyDown)
 	case "up":
 		return specialKey(tea.KeyUp)
+	case "right":
+		return specialKey(tea.KeyRight)
+	case "left":
+		return specialKey(tea.KeyLeft)
+	case "space":
+		return specialKey(tea.KeySpace)
 	}
 	return runeKey([]rune(name)[0])
 }

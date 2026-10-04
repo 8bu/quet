@@ -26,19 +26,24 @@ import (
 // maxListedInvalid is how many invalid pulled labels the stderr report names.
 const maxListedInvalid = 50
 
-// loginInput, loginIsTerminal and readSecret are how `quet web login` reads the Cloudflare Access
-// service token. Tests replace them.
+// loginInput, loginIsTerminal, loginOpenBrowser and readSecret are how `quet web login` reads the Cloudflare
+// Access service token and opens the browser. Tests replace them.
 var (
 	// loginInput is the stdin of a non-terminal login: the client id and the secret, one per line.
 	loginInput io.Reader = os.Stdin
 	// loginIsTerminal reports whether stdin is a terminal, so the secret can be read without echo.
 	loginIsTerminal = func() bool { return isatty.IsTerminal(os.Stdin.Fd()) }
+	// loginOpenBrowser opens the authorization URL of a browser login (nil: the platform default browser).
+	loginOpenBrowser func(url string) error
 	// readSecret reads a line from the terminal without echoing it.
 	readSecret = func() (string, error) {
 		b, err := term.ReadPassword(int(os.Stdin.Fd()))
 		return string(b), err
 	}
 )
+
+// revokeTimeout bounds the revocation request of `quet web logout`.
+const revokeTimeout = 5 * time.Second
 
 // runWeb runs one `quet web` subcommand and returns the process exit code: 0 success, 1 failure.
 // Failures are reported on stderr; secrets are never printed.
@@ -51,6 +56,8 @@ func runWeb(cmd command, stdout, stderr io.Writer) int {
 		err = webRemote(cmd, stdout)
 	case "login":
 		err = webLogin(ctx, cmd, stdout, stderr)
+	case "logout":
+		err = webLogout(ctx, cmd, stdout, stderr)
 	case "push":
 		err = webPush(ctx, cmd, stdout, stderr)
 	case "list":
@@ -109,8 +116,8 @@ func webRemote(cmd command, stdout io.Writer) error {
 	return nil
 }
 
-// printRemotes lists the remotes: a * for the default, the name, the URL and whether a client id and
-// secret are stored. The secret itself is never printed.
+// printRemotes lists the remotes: a * for the default, the name, the URL and the kind of stored
+// credentials (oauth, service token or no). No secret is ever printed.
 func printRemotes(stdout io.Writer, remotes *web.Remotes) {
 	if len(remotes.List) == 0 {
 		fmt.Fprintln(stdout, "no remotes (add one with `quet web remote add <name> <url>`)")
@@ -123,45 +130,101 @@ func printRemotes(stdout io.Writer, remotes *web.Remotes) {
 		if r.Name == remotes.Default {
 			mark = "*"
 		}
-		if r.ClientID != "" && r.ClientSecret != "" {
-			creds = "yes"
+		switch {
+		case r.OAuth != nil:
+			creds = "oauth"
+		case r.ClientID != "" && r.ClientSecret != "":
+			creds = "service token"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", mark, r.Name, r.URL, creds)
 	}
 	tw.Flush()
 }
 
-// webLogin runs `quet web login [<name>]`: it reads the Client ID (echoed) and Client Secret (not
-// echoed) of a Cloudflare Access service token, stores them in the remote's entry, then asks the
-// server who it sees and prints the identity. Without a terminal on stdin the two values are read
-// as two lines. The remote is the one named, else the default; the stored URL is used, ignoring
+// pickRemote returns the stored remote named by the first argument of cmd, else the default one. verb
+// completes the error when there is none ("log in to", "log out of"). The stored URL is used, ignoring
 // QUET_WEB_URL.
-func webLogin(ctx context.Context, cmd command, stdout, stderr io.Writer) error {
-	remotes, err := web.LoadRemotes()
-	if err != nil {
-		return err
-	}
+func pickRemote(remotes *web.Remotes, cmd command, verb string) (web.Remote, error) {
 	name := remotes.Default
 	if len(cmd.webArgs) > 0 {
 		name = cmd.webArgs[0]
 	}
 	if name == "" {
-		return errors.New("no remote to log in to: add one with `quet web remote add <name> <url>` or name it")
+		return web.Remote{}, fmt.Errorf("no remote to %s: add one with `quet web remote add <name> <url>` or name it", verb)
 	}
 	rem, ok := remotes.Get(name)
 	if !ok {
-		return fmt.Errorf("unknown remote %q (add it with `quet web remote add %s <url>`)", name, name)
+		return web.Remote{}, fmt.Errorf("unknown remote %q (add it with `quet web remote add %s <url>`)", name, name)
 	}
+	return rem, nil
+}
+
+// webLogin runs `quet web login [<name>]`. By default it logs in with the browser (Cloudflare Access
+// Managed OAuth), stores the token in the remote's entry and prints who the server sees; --no-browser
+// only prints the URL to open. With --service-token it reads the Client ID (echoed) and Client Secret
+// (not echoed) of a Cloudflare Access service token instead (two lines when stdin is not a terminal).
+// Either way the other kind of credential of the remote is removed. The remote is the one named, else
+// the default; the stored URL is used, ignoring QUET_WEB_URL.
+func webLogin(ctx context.Context, cmd command, stdout, stderr io.Writer) error {
+	remotes, err := web.LoadRemotes()
+	if err != nil {
+		return err
+	}
+	rem, err := pickRemote(remotes, cmd, "log in to")
+	if err != nil {
+		return err
+	}
+	if cmd.serviceToken {
+		return serviceTokenLogin(ctx, remotes, rem, stdout, stderr)
+	}
+	opt := web.LoginOptions{Notify: func(url string) {
+		if cmd.noBrowser {
+			fmt.Fprintf(stdout, "Open this URL in your browser to log in:\n%s\n", url)
+		} else {
+			fmt.Fprintf(stdout, "Opening the browser to log in…\n%s\n", url)
+		}
+	}}
+	opt.OpenBrowser = loginOpenBrowser
+	if cmd.noBrowser {
+		opt.OpenBrowser = func(string) error { return nil }
+	}
+	tok, err := web.Login(ctx, rem, opt)
+	if errors.Is(err, web.ErrNoAuthNeeded) {
+		fmt.Fprintf(stdout, "%s needs no login: the server accepts requests without credentials\n", rem.Name)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := web.SaveOAuth(rem.Name, tok); err != nil {
+		return err
+	}
+	rem.SetOAuth(tok)
+	client, err := web.NewClient(rem, web.WithTokenSaver(web.TokenSaver(rem.Name)))
+	if err != nil {
+		return err
+	}
+	identity, err := client.Whoami(ctx)
+	if err != nil {
+		return fmt.Errorf("logged in, but the server did not accept the login: %w", err)
+	}
+	fmt.Fprintf(stdout, "logged in to %s as %s\n", rem.Name, identity)
+	return nil
+}
+
+// serviceTokenLogin is `quet web login --service-token`: it reads a Cloudflare Access service token,
+// stores it in the remote's entry (dropping any browser login), then asks the server who it sees.
+func serviceTokenLogin(ctx context.Context, remotes *web.Remotes, rem web.Remote, stdout, stderr io.Writer) error {
 	id, secret, err := readCredentials(stderr)
 	if err != nil {
 		return err
 	}
-	rem.ClientID, rem.ClientSecret = id, secret
+	rem.SetServiceToken(id, secret)
 	remotes.Set(rem)
 	if err := remotes.Save(); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "saved credentials for remote %s\n", name)
+	fmt.Fprintf(stdout, "saved credentials for remote %s\n", rem.Name)
 	client, err := web.NewClient(rem)
 	if err != nil {
 		return err
@@ -170,7 +233,35 @@ func webLogin(ctx context.Context, cmd command, stdout, stderr io.Writer) error 
 	if err != nil {
 		return fmt.Errorf("credentials saved, but the server did not accept them: %w", err)
 	}
-	fmt.Fprintf(stdout, "logged in to %s as %s\n", name, identity)
+	fmt.Fprintf(stdout, "logged in to %s as %s\n", rem.Name, identity)
+	return nil
+}
+
+// webLogout runs `quet web logout [<name>]`: it revokes the stored browser login at the authorization
+// server (best effort: a failure is only a warning on stderr) and removes the stored login and service
+// token of the remote (the remote itself stays).
+func webLogout(ctx context.Context, cmd command, stdout, stderr io.Writer) error {
+	remotes, err := web.LoadRemotes()
+	if err != nil {
+		return err
+	}
+	rem, err := pickRemote(remotes, cmd, "log out of")
+	if err != nil {
+		return err
+	}
+	if rem.OAuth != nil {
+		rctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+		if err := rem.OAuth.Revoke(rctx); err != nil {
+			fmt.Fprintf(stderr, "quet: warning: %v\n", err)
+		}
+		cancel()
+	}
+	rem.ClearCredentials()
+	remotes.Set(rem)
+	if err := remotes.Save(); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "logged out of %s\n", rem.Name)
 	return nil
 }
 
@@ -208,7 +299,7 @@ func readCredentials(stderr io.Writer) (id, secret string, err error) {
 }
 
 // webClient resolves the remote to use (see web.Remotes.Resolve: --remote, the default remote or the
-// environment) and returns a client for it.
+// environment) and returns a client for it. A refreshed browser login is saved back to remotes.yaml.
 func webClient(name string) (*web.Client, error) {
 	remotes, err := web.LoadRemotes()
 	if err != nil {
@@ -218,7 +309,11 @@ func webClient(name string) (*web.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return web.NewClient(rem)
+	var opts []web.ClientOption
+	if rem.OAuth != nil {
+		opts = append(opts, web.WithTokenSaver(web.TokenSaver(rem.Name)))
+	}
+	return web.NewClient(rem, opts...)
 }
 
 // webPush runs `quet web push`: it validates the queue, schema and proposals locally, then

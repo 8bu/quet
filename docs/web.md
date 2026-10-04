@@ -19,38 +19,78 @@ quet web pull --project expenses --all --out-dir pulled/
 
 ## Setup
 
-The admin API of quet-web sits behind Cloudflare Access, which lets Quet in with a **service token**.
+The admin API of quet-web sits behind Cloudflare Access. `quet web login` logs you in through the
+browser, the same way you log in to the admin dashboard. You copy no token by hand.
+
+1. The Access admin turns on **Managed OAuth** for the Access application that protects the
+   quet-web admin API, and allows **loopback clients**: apps that listen on `127.0.0.1` for the
+   login callback. This is done once, in the Cloudflare Zero Trust dashboard.
+2. Register the server and log in:
+
+   ```sh
+   quet web remote add origin https://quet.example.com
+   quet web login
+   ```
+
+   `login` opens your browser and prints the same URL, in case the browser does not open. You log in
+   with Cloudflare Access. Quet waits up to five minutes for you to finish, then saves the login and
+   prints `logged in to origin as <identity>`. Use `quet web login --no-browser` to print the URL
+   only, and open it yourself.
+
+Quet keeps the login in `remotes.yaml` and refreshes it without asking you, for as long as the
+Access grant lasts. When the grant ends, a command stops with the error
+"session expired: run quet web login". Run `quet web login` again.
+
+`quet web logout [<name>]` removes the stored login (and any stored service token) of a remote and
+prints `logged out of <name>`.
+
+### Service tokens
+
+A **service token** is for CI and other places without a browser. Use the environment variables
+below, or store a token with `--service-token`:
 
 1. In the Cloudflare Zero Trust dashboard create a service token (Access → Service Auth → Service
    Tokens → Create Service Token) and copy its **Client ID** (ends in `.access`) and **Client
    Secret**. The secret is shown once.
 2. Make sure the Access policy that protects the quet-web admin application has a **Service Auth**
    rule that includes this token.
-3. Register the server and store the token:
+3. Store the token:
 
    ```sh
-   quet web remote add origin https://quet.example.com
-   quet web login            # prompts: Client ID (echoed), Client Secret (not echoed)
+   quet web login --service-token   # prompts: Client ID (echoed), Client Secret (not echoed)
    ```
 
-   `login` saves the token, then asks the server who it sees and prints it
-   (`logged in to origin as <identity>`). When stdin is not a terminal, `login` reads the two values
-   as two lines (client id, then secret), so it can be scripted:
+   `login --service-token` saves the token, then asks the server who it sees and prints it. When
+   stdin is not a terminal, it reads the two values as two lines (client id, then secret), so it can
+   be scripted:
 
    ```sh
-   printf '%s\n%s\n' "$CLIENT_ID" "$CLIENT_SECRET" | quet web login
+   printf '%s\n%s\n' "$CLIENT_ID" "$CLIENT_SECRET" | quet web login --service-token
    ```
+
+A remote has one login at a time. Storing a browser login removes its service token, and storing a
+service token removes its browser login. For one request, Quet uses the first of these that exists:
+the service token from the environment variables, the stored browser login, the stored service
+token.
 
 ### Remotes
 
 Remotes work like git remotes and are stored in `~/.config/quet/remotes.yaml` (under
 `$XDG_CONFIG_HOME/quet/` when that is set), written atomically with mode `0600` because the file
-holds secrets:
+holds secrets. A remote has either a browser login (`oauth`) or a service token:
 
 ```yaml
 default: origin
 remotes:
   origin:
+    url: https://quet.example.com
+    oauth:
+      client_id: <registered by login>
+      token_endpoint: https://quet.example.com/token
+      access_token: <short lived>
+      refresh_token: <rotated on each refresh>
+      expires_at: 2026-10-04T10:00:00Z
+  ci:
     url: https://quet.example.com
     client_id: xxxx.access
     client_secret: yyyy
@@ -59,17 +99,18 @@ remotes:
 | Command | Effect |
 | --- | --- |
 | `quet web remote add <name> <url>` | Add a remote; the first one becomes the default. The name is letters, digits, `.`, `_`, `-` (at most 32 characters). The URL is `http(s)://host[:port]` with no path or query. |
-| `quet web remote list` | One row per remote: `*` marks the default, then name, URL and whether credentials are stored (`yes`/`no`). Secrets are never printed, here or anywhere else. |
+| `quet web remote list` | One row per remote: `*` marks the default, then name, URL and the stored login: `oauth`, `service token` or `no`. Secrets are never printed, here or anywhere else. |
 | `quet web remote remove <name>` | Remove a remote; if it was the default there is no default afterwards. |
 | `quet web remote default <name>` | Make a remote the default. |
-| `quet web login [<name>]` | Store the service token of `<name>` (default: the default remote) and check it. |
+| `quet web login [<name>]` | Log in to `<name>` (default: the default remote) through the browser and check it. `--no-browser` prints the URL only. `--service-token` stores a service token instead. |
+| `quet web logout [<name>]` | Remove the stored login and service token of `<name>`. |
 
 Every other command takes `--remote <name>`; without it the default remote is used. With no remote
 configured, Quet uses `QUET_WEB_URL`, and fails with a hint when that is unset too.
 
 ### Environment variables
 
-These override the picked remote, whatever it is, and are what you want in CI:
+These override the picked remote's service token, whatever it is, and are what you want in CI:
 
 | Variable | Overrides |
 | --- | --- |
@@ -78,8 +119,8 @@ These override the picked remote, whatever it is, and are what you want in CI:
 | `QUET_ACCESS_CLIENT_SECRET` | The Client Secret, sent as `CF-Access-Client-Secret` |
 
 A server on `localhost` started with the development admin bypass needs no credentials; a remote
-without them is allowed. When Cloudflare Access rejects the token (HTTP 302, 401 or 403) the error
-says so and suggests `quet web login`.
+without them is allowed, and `login` says so. When Cloudflare Access rejects the login (HTTP 302,
+401 or 403) the error says so and suggests `quet web login`.
 
 ## Push
 
@@ -179,12 +220,14 @@ shows the current link (`remote/project`, or `not linked`) and offers:
 
 | Item | Key | What it does |
 | --- | --- | --- |
-| Remote & project… | `r` | Pick an existing remote or add one (name, URL, Client ID, Client Secret, masked), saved to `remotes.yaml`; then pick a project from the server or `new project: <slug>` (prefilled from the queue file name). The choice is saved in the sidecar. |
+| Remote & project… | `r` | Pick an existing remote or add one, saved to `remotes.yaml`; then pick a project from the server or `new project: <slug>` (prefilled from the queue file name). The choice is saved in the sidecar. The add form asks for the name and URL, then how to log in. **Browser** is the default: `enter` opens your browser, the status shows the login URL, `esc` cancels, and the remote is saved when you finish. **Service token** shows the Client ID and Client Secret (masked) fields. Use `space` or `←`/`→` on the *Log in with* row to switch. |
 | Publish | `p` | A confirm screen (project, counts), then the same push as `quet web push` with the session's queue, schema and proposals. `enter` or `y` confirms, `esc` cancels. The status line shows the result. Not available in a re-check session opened without a queue file. |
 | Compare collaborators | `c` | Compare mode, below. |
+| Log in again | `l` | Run the browser login again for the linked remote, for example after `session expired`. The status shows the login URL and `esc` cancels. |
 
 Move with `j`/`k` (or the arrows) and `enter`, or press the item's key; `esc` closes the menu.
-Publish and Compare without a link open the Remote & project form first.
+Publish and Compare without a link open the Remote & project form first. When a call fails because
+of the login, the status says to press `w`, then choose Log in again.
 
 ### Compare mode
 
@@ -225,5 +268,5 @@ same path as marking a record (null label statuses, default span statuses and va
 | `2` | Command line error: unknown subcommand, a missing or contradictory flag. The usage goes to stderr |
 
 Errors are printed as `quet: <message>`; server errors include the HTTP status. Secrets never appear
-in any output. If `login` saves a token the server then rejects, it says so and exits 1, and the
-token stays stored: run `login` again with the right one.
+in any output. If `login --service-token` saves a token the server then rejects, it says so and exits
+1, and the token stays stored: run `login --service-token` again with the right one.

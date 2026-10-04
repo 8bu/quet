@@ -72,20 +72,22 @@ type command struct {
 	hasProposals  bool
 
 	// web flags (`quet web ...`); the queue file of `web push` is webArgs[0]
-	webAction   string   // "remote", "login", "push", "list" or "pull"
-	webSub      string   // the `web remote` subcommand: "add", "list", "remove" or "default"
-	webArgs     []string // positional arguments after the web subcommand
-	project     string
-	hasProject  bool
-	projectName string
-	hasName     bool
-	remote      string
-	hasRemote   bool
-	user        string
-	hasUser     bool
-	all         bool
-	outDir      string
-	hasOutDir   bool
+	webAction    string   // "remote", "login", "logout", "push", "list" or "pull"
+	webSub       string   // the `web remote` subcommand: "add", "list", "remove" or "default"
+	webArgs      []string // positional arguments after the web subcommand
+	project      string
+	hasProject   bool
+	projectName  string
+	hasName      bool
+	remote       string
+	hasRemote    bool
+	user         string
+	hasUser      bool
+	all          bool
+	outDir       string
+	hasOutDir    bool
+	noBrowser    bool // `web login --no-browser`: print the URL instead of opening the browser
+	serviceToken bool // `web login --service-token`: prompt for a Cloudflare Access service token
 }
 
 // usageError is a command line mistake: reported on stderr with the usage text, exit code 2.
@@ -342,6 +344,10 @@ func (c *command) setBoolFlag(name string) error {
 		c.revert = true
 	case "--all":
 		c.all = true
+	case "--no-browser":
+		c.noBrowser = true
+	case "--service-token":
+		c.serviceToken = true
 	default:
 		return usagef("unknown flag %s", name)
 	}
@@ -568,11 +574,13 @@ func (c *command) givenFlags() []string {
 	add(c.hasUser, "--user")
 	add(c.all, "--all")
 	add(c.hasOutDir, "--out-dir")
+	add(c.noBrowser, "--no-browser")
+	add(c.serviceToken, "--service-token")
 	return flags
 }
 
 // webOnlyFlags are the flags only `quet web` takes.
-var webOnlyFlags = []string{"--project", "--name", "--remote", "--user", "--all", "--out-dir"}
+var webOnlyFlags = []string{"--project", "--name", "--remote", "--user", "--all", "--out-dir", "--no-browser", "--service-token"}
 
 // rejectWebFlags rejects the web-only flags given to a command other than `quet web`.
 func (c *command) rejectWebFlags() error {
@@ -584,12 +592,12 @@ func (c *command) rejectWebFlags() error {
 	return nil
 }
 
-// parseWeb parses what follows `quet web`: remote add|list|remove|default, login, push, list or
+// parseWeb parses what follows `quet web`: remote add|list|remove|default, login, logout, push, list or
 // pull, with the positional arguments each takes (the flags were parsed already), then validates
 // the whole command.
 func (c *command) parseWeb(args []string) error {
 	if len(args) == 0 {
-		return usagef("`quet web` needs a subcommand: remote, login, push, list or pull")
+		return usagef("`quet web` needs a subcommand: remote, login, logout, push, list or pull")
 	}
 	c.webAction, args = args[0], args[1:]
 	switch c.webAction {
@@ -601,9 +609,9 @@ func (c *command) parseWeb(args []string) error {
 		if !slices.Contains([]string{"add", "list", "remove", "default"}, c.webSub) {
 			return usagef("unknown subcommand `quet web remote %s` (want add, list, remove or default)", c.webSub)
 		}
-	case "login", "push", "list", "pull":
+	case "login", "logout", "push", "list", "pull":
 	default:
-		return usagef("unknown subcommand `quet web %s` (want remote, login, push, list or pull)", c.webAction)
+		return usagef("unknown subcommand `quet web %s` (want remote, login, logout, push, list or pull)", c.webAction)
 	}
 	if len(args) > 0 {
 		c.webArgs = args
@@ -635,6 +643,14 @@ func (c *command) validateWeb() error {
 			return usagef("unexpected argument %q", c.webArgs[want])
 		}
 	case "login":
+		if len(c.webArgs) > 1 {
+			return usagef("unexpected argument %q", c.webArgs[1])
+		}
+		if c.noBrowser && c.serviceToken {
+			return usagef("--no-browser and --service-token are mutually exclusive")
+		}
+		allowed = []string{"--no-browser", "--service-token"}
+	case "logout":
 		if len(c.webArgs) > 1 {
 			return usagef("unexpected argument %q", c.webArgs[1])
 		}

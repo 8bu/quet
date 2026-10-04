@@ -230,6 +230,21 @@ func TestParseArgs(t *testing.T) {
 			want: command{kind: "web", status: "approved", webAction: "login", webArgs: []string{"origin"}},
 		},
 		{
+			name: "web login with the browser flag",
+			args: []string{"web", "login", "--no-browser", "origin"},
+			want: command{kind: "web", status: "approved", webAction: "login", webArgs: []string{"origin"}, noBrowser: true},
+		},
+		{
+			name: "web login with a service token",
+			args: []string{"web", "login", "--service-token"},
+			want: command{kind: "web", status: "approved", webAction: "login", serviceToken: true},
+		},
+		{
+			name: "web logout named remote",
+			args: []string{"web", "logout", "origin"},
+			want: command{kind: "web", status: "approved", webAction: "logout", webArgs: []string{"origin"}},
+		},
+		{
 			name: "web push with every flag, any order",
 			args: []string{"web", "push", "--schema=s.yaml", "q.jsonl", "--project", "expenses", "--name", "Expenses 2026", "--proposals", "p.jsonl", "--remote", "origin"},
 			want: command{
@@ -380,6 +395,11 @@ func TestParseArgsErrors(t *testing.T) {
 		{name: "web remote with flag", args: []string{"web", "remote", "list", "--json"}, want: "--json is not valid with `quet web remote list`"},
 		{name: "web login with two names", args: []string{"web", "login", "a", "b"}, want: `unexpected argument "b"`},
 		{name: "web login with flag", args: []string{"web", "login", "--remote", "a"}, want: "--remote is not valid with `quet web login`"},
+		{name: "web login with both modes", args: []string{"web", "login", "--no-browser", "--service-token"}, want: "--no-browser and --service-token are mutually exclusive"},
+		{name: "web logout with two names", args: []string{"web", "logout", "a", "b"}, want: `unexpected argument "b"`},
+		{name: "web logout with flag", args: []string{"web", "logout", "--no-browser"}, want: "--no-browser is not valid with `quet web logout`"},
+		{name: "web list with login flag", args: []string{"web", "list", "--service-token"}, want: "--service-token is not valid with `quet web list`"},
+		{name: "login flag outside web", args: []string{"stats", "c.jsonl", "--no-browser"}, want: "--no-browser is only valid with `quet web`"},
 		{name: "web push without queue", args: []string{"web", "push", "--schema", "s.yaml", "--project", "p"}, want: "missing queue file"},
 		{name: "web push two queues", args: []string{"web", "push", "q.jsonl", "r.jsonl", "--schema", "s.yaml", "--project", "p"}, want: `unexpected argument "r.jsonl"`},
 		{name: "web push without schema", args: []string{"web", "push", "q.jsonl", "--project", "p"}, want: "`quet web push` needs --schema"},

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -113,63 +114,126 @@ type RemoteLabel struct {
 	Label        json.RawMessage `json:"label"`
 }
 
-// Client talks to the admin API of one quet-web server.
+// Client talks to the admin API of one quet-web server. It is safe for concurrent use.
 type Client struct {
 	base, id, secret string
 	http             *http.Client
+
+	// OAuth state: oauth is set when requests carry the stored browser login tok (otherwise a service token or
+	// nothing) and saver persists it after each refresh; mu guards tok.
+	oauth bool
+	mu    sync.Mutex
+	tok   *OAuthToken
+	saver func(*OAuthToken) error
 }
 
-// NewClient returns a client for r. An empty URL is an error; a missing client id / secret is allowed (a local
-// development server accepts unauthenticated admin requests).
-func NewClient(r Remote) (*Client, error) {
+// ClientOption customizes NewClient.
+type ClientOption func(*Client)
+
+// WithTokenSaver sets the function that persists the OAuth token after each refresh (the refresh token rotates, so
+// the new one must be stored at once). The CLI and the TUI pass a saver that updates remotes.yaml.
+func WithTokenSaver(save func(*OAuthToken) error) ClientOption {
+	return func(c *Client) { c.saver = save }
+}
+
+// NewClient returns a client for r. An empty URL is an error; a missing credential is allowed (a local development
+// server accepts unauthenticated admin requests). A stored OAuth token (r.OAuth) is sent as a Bearer token and
+// takes precedence over the service token of r (ClientID and ClientSecret); Remotes.Resolve drops the OAuth token
+// in favour of a service token from the environment.
+func NewClient(r Remote, opts ...ClientOption) (*Client, error) {
 	base := normalizeURL(strings.TrimSpace(r.URL))
 	if base == "" {
 		return nil, errors.New("remote URL is empty")
 	}
-	return &Client{
+	c := &Client{
 		base:   base,
 		id:     r.ClientID,
 		secret: r.ClientSecret,
 		http: &http.Client{
 			Timeout: 60 * time.Second,
 			// Access answers rejected credentials with a redirect to its login page: report it, do not follow it.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			CheckRedirect: noRedirect,
 		},
-	}, nil
+	}
+	if r.OAuth != nil && (r.OAuth.AccessToken != "" || r.OAuth.RefreshToken != "") {
+		tok := *r.OAuth
+		c.tok, c.oauth = &tok, true
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
+}
+
+// roundTrip sends one admin API request with the credentials of the client and returns the response and the OAuth
+// access token it was sent with ("" when none). data, when non-nil, is the JSON body.
+func (c *Client) roundTrip(ctx context.Context, method, target, path string, data []byte) (*http.Response, string, error) {
+	var body io.Reader
+	if data != nil {
+		body = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	access := ""
+	if c.oauth {
+		if access, err = c.accessToken(ctx); err != nil {
+			return nil, "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+access)
+	} else {
+		// Header keys are set verbatim (not canonicalized) to match the names Cloudflare documents.
+		if c.id != "" {
+			req.Header["CF-Access-Client-Id"] = []string{c.id}
+		}
+		if c.secret != "" {
+			req.Header["CF-Access-Client-Secret"] = []string{c.secret}
+		}
+	}
+	req.Header.Set("Accept", "application/json")
+	if data != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	return resp, access, nil
 }
 
 // do sends one admin API request. A non-nil in is sent as the JSON body; a non-nil out receives the JSON response.
+// With an OAuth login the access token is refreshed first when it is about to expire, and once more (with one retry
+// of the request) when the server answers 401 or 302.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, in, out any) error {
-	var body io.Reader
+	var data []byte
 	if in != nil {
-		data, err := json.Marshal(in)
-		if err != nil {
+		var err error
+		if data, err = json.Marshal(in); err != nil {
 			return fmt.Errorf("encode %s %s: %w", method, path, err)
 		}
-		body = bytes.NewReader(data)
 	}
 	target := c.base + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	resp, used, err := c.roundTrip(ctx, method, target, path, data)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, path, err)
+		return err
 	}
-	// Header keys are set verbatim (not canonicalized) to match the names Cloudflare documents.
-	if c.id != "" {
-		req.Header["CF-Access-Client-Id"] = []string{c.id}
-	}
-	if c.secret != "" {
-		req.Header["CF-Access-Client-Secret"] = []string{c.secret}
-	}
-	req.Header.Set("Accept", "application/json")
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, path, err)
+	if c.oauth && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusFound) {
+		retry, err := c.refreshAfterReject(ctx, used)
+		if err != nil {
+			resp.Body.Close()
+			return err
+		}
+		if retry {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))
+			resp.Body.Close()
+			if resp, _, err = c.roundTrip(ctx, method, target, path, data); err != nil {
+				return err
+			}
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

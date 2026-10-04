@@ -80,7 +80,7 @@ func (m annotModel) onPull(msg webPullMsg) (annotModel, tea.Cmd) {
 	}
 	m = m.endWeb()
 	if msg.err != nil {
-		return m.webDone(true, "%v", msg.err)
+		return m.webDone(true, "%s", webErrText(msg.err))
 	}
 	cs := m.newCompare(msg.pulled)
 	if len(cs.users) == 0 {

@@ -103,11 +103,17 @@ deploy it on your own Cloudflare account.
   and you pick the final label.
 
 ```sh
-quet web remote add origin https://<your-quet-web-host>   # one time, then: quet web login
+quet web remote add origin https://<your-quet-web-host>   # one time
+quet web login                                            # opens the browser
 quet web push queue.jsonl --schema schema.yaml --project expenses
 quet web list
 quet web pull --project expenses --all --out-dir pulled/
 ```
+
+`quet web login` opens your browser. You log in with Cloudflare Access, like you do for the
+dashboard. Quet refreshes the login by itself. The Access admin turns on Managed OAuth for the
+app once. CI can use a service token instead (`--service-token`, or the `QUET_ACCESS_CLIENT_*`
+environment variables). `quet web logout` removes the login.
 
 Labels from the web use the same format as Quet labels, with `note` and `span_status`. See
 [Web sync](docs/web.md).

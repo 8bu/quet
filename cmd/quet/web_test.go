@@ -339,7 +339,7 @@ func TestWebLoginStoresCredentialsAndNeverEchoesTheSecret(t *testing.T) {
 	addRemote(t, f)
 	stubLogin(t, "abc123.access\n"+secretValue+"\n")
 
-	code, stdout, stderr := runWebCmd(t, "web", "login")
+	code, stdout, stderr := runWebCmd(t, "web", "login", "--service-token")
 	if code != 0 {
 		t.Fatalf("login: exit %d, stderr %q", code, stderr)
 	}
@@ -369,7 +369,7 @@ func TestWebLoginStoresCredentialsAndNeverEchoesTheSecret(t *testing.T) {
 	if strings.Contains(out, secretValue) || strings.Contains(out, "abc123") {
 		t.Errorf("remote list shows credentials:\n%s", out)
 	}
-	if !strings.Contains(out, "yes") {
+	if !strings.Contains(out, "service token") {
 		t.Errorf("remote list does not say credentials are set:\n%s", out)
 	}
 }
@@ -386,12 +386,12 @@ func TestWebLoginInputErrors(t *testing.T) {
 		"empty secret": "id\n\n",
 	} {
 		stubLogin(t, in)
-		if code, _, stderr := runWebCmd(t, "web", "login"); code != 1 || stderr == "" {
+		if code, _, stderr := runWebCmd(t, "web", "login", "--service-token"); code != 1 || stderr == "" {
 			t.Errorf("%s: exit %d, stderr %q", name, code, stderr)
 		}
 	}
 	stubLogin(t, "id\nsecret\n")
-	if code, _, stderr := runWebCmd(t, "web", "login", "ghost"); code != 1 || !strings.Contains(stderr, `unknown remote "ghost"`) {
+	if code, _, stderr := runWebCmd(t, "web", "login", "ghost", "--service-token"); code != 1 || !strings.Contains(stderr, `unknown remote "ghost"`) {
 		t.Errorf("unknown remote: exit %d, stderr %q", code, stderr)
 	}
 	if strings.Contains(readFile(t, web.RemotesPath()), "secret") {
@@ -406,7 +406,7 @@ func TestWebLoginSavedButRejected(t *testing.T) {
 	addRemote(t, f)
 	stubLogin(t, "id\n"+secretValue+"\n")
 
-	code, stdout, stderr := runWebCmd(t, "web", "login")
+	code, stdout, stderr := runWebCmd(t, "web", "login", "--service-token")
 	if code != 1 || !strings.Contains(stderr, "run `quet web login`") || !strings.Contains(stderr, "credentials saved") {
 		t.Errorf("exit %d, stderr %q", code, stderr)
 	}

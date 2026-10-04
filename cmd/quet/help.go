@@ -12,7 +12,7 @@ Usage:
   quet stats <corpus> [flags]
   quet export <corpus> [flags]
   quet annotate <queue.jsonl> --schema <schema.yaml> (--out|--labels) <labels.jsonl> [--proposals <proposals.jsonl>]
-  quet web <remote|login|push|list|pull> ...
+  quet web <remote|login|logout|push|list|pull> ...
   quet init [--global] [--force]
   quet update [--check]
   quet help
@@ -72,17 +72,23 @@ in flags.yaml; suggest sets free-form suggested flags; --add and --remove take
 comma-separated names and may repeat. --text-file - reads stdin. export -o -
 writes the records to stdout and its summary to stderr.
 
-Web (quet-web server, Cloudflare Access service token; see docs/web.md):
+Web (quet-web server, Cloudflare Access login or service token; see docs/web.md):
   quet web remote add <name> <url>      remote list | remove <name> | default <name>
-  quet web login [<name>]               prompts Client ID and Secret (secret not echoed;
+  quet web login [<name>] [--no-browser]
+                                        logs in with the browser (Cloudflare Access OAuth);
+                                        --no-browser only prints the URL to open
+  quet web login [<name>] --service-token
+                                        prompts Client ID and Secret (secret not echoed;
                                         two lines on stdin without a terminal)
+  quet web logout [<name>]              forgets the stored login or service token
   quet web push <queue.jsonl> --schema <schema.yaml> --project <slug>
       [--proposals <p.jsonl>] [--name <name>] [--remote <name>]
   quet web list [--remote <name>] [--json]
   quet web pull --project <slug> (--user <name> | --all) [--remote <name>]
       (--out <labels.jsonl> [--force] | --labels <labels.jsonl> | --out-dir <dir> [--force])
 Remotes live in ~/.config/quet/remotes.yaml (mode 0600; QUET_WEB_URL,
-QUET_ACCESS_CLIENT_ID and QUET_ACCESS_CLIENT_SECRET override). push upserts the
+QUET_ACCESS_CLIENT_ID and QUET_ACCESS_CLIENT_SECRET override; the service token
+from the environment wins over a stored login). push upserts the
 project and its records (text of a labelled record cannot change) and replaces
 its proposals. pull --user --out writes a fresh labels file, --labels merges
 into an existing one (other lines kept byte for byte; --project/--remote may
